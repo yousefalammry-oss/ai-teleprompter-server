@@ -150,8 +150,9 @@ class StreamingEngine {
         const contentSpan = document.createElement('div');
         botMsgDiv.appendChild(contentSpan);
 
-        let fullText = "";
-        let buffer = "";
+       let fullText = "";
+let buffer = "";
+let responseBuffer = "";
         
         try {
             const response = await fetch('/api/chat', {
