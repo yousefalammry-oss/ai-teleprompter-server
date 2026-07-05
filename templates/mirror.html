@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Groq Mirror Pro</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <header class="main-header">
+            <div class="logo">Groq<span>Mirror</span></div>
+            <div class="actions">
+                <button id="clear-btn" title="Clear Chat">Clear</button>
+            </div>
+        </header>
+
+        <main id="chat-container" class="chat-area"></main>
+
+        <footer class="input-area">
+            <div class="input-wrapper">
+                <textarea id="user-input" placeholder="Type a message or a Mermaid request..." rows="1"></textarea>
+                <div class="button-group">
+                    <button id="send-btn" class="primary-btn">Send</button>
+                    <button id="stop-btn" class="secondary-btn hidden">Stop</button>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <script type="module" src="/static/app.js"></script>
+</body>
+</html>
