@@ -82,11 +82,13 @@ async def chat_endpoint(request: Request):
         return StreamingResponse(
             stream_generator(),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Content-Encoding": "none",
-            }
+            headers = {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",  # Critical for Nginx/Render/Cloudflare
+    "Transfer-Encoding": "chunked",
+}
         )
 
     except Exception as e:
