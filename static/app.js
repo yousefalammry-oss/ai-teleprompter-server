@@ -165,30 +165,28 @@ class StreamingEngine {
             const decoder = new TextDecoder();
 
             while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
+    const { value, done } = await reader.read();
+    if (done) break;
 
-                const chunk = decoder.decode(value, { stream: true });
-                const lines = chunk.split('\n');
-const data = JSON.parse(dataStr); // Inside a try-catch that ignores errors
+    responseBuffer += decoder.decode(value, { stream: true });
+    
+    // Split by the SSE message separator
+    let parts = responseBuffer.split('\n\n');
+    
+    // Keep the last part in the buffer (it might be incomplete)
+    responseBuffer = parts.pop();
 
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const dataStr = line.slice(6);
-                        if (dataStr === '[DONE]') break;
-
-                        try {
-                            const data = JSON.parse(dataStr);
-                            if (data.content) {
-                                fullText += data.content;
-                                buffer += data.content;
-                                
-                                // Schedule UI update to prevent UI jank
-                                this.scheduler.enqueue(() => {
-                                    this.renderIncremental(contentSpan, fullText);
-                                });
-                            }
-                        } catch (e) { /* Partial JSON ignore */ }
+    for (const part of parts) {
+        const line = part.trim();
+        if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6);
+            if (dataStr === '[DONE]') continue;
+            try {
+                const data = JSON.parse(dataStr);
+                // Now safely update UI
+            } catch (e) {
+                console.error("Malformed frame:", line);
+            }
                     }
                 }
             }
