@@ -170,6 +170,7 @@ class StreamingEngine {
 
                 const chunk = decoder.decode(value, { stream: true });
                 const lines = chunk.split('\n');
+const data = JSON.parse(dataStr); // Inside a try-catch that ignores errors
 
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
