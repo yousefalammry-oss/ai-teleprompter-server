@@ -41,7 +41,8 @@ async def index(request: Request):
     return templates.TemplateResponse("mirror.html", {"request": request})
 
 @app.post("/api/update-config")
-async def update_config(config: dict):
+async def update_config(request: Request):
+    # قراءة البيانات يدوياً من الطلب
     data = await request.json()
     SYSTEM_CONFIG.update(data)
     return {"status": "success"}
