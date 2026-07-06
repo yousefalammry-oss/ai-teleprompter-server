@@ -1,11 +1,10 @@
 <!DOCTYPE html>
-<html lang="en" dir="ltr">
+<html lang="ar" dir="auto">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Groq Mirror Pro</title>
     <link rel="stylesheet" href="/static/style.css">
-    <!-- Dependencies -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -33,6 +32,51 @@
         </footer>
     </div>
 
+    <script>
+        // دالة عرض المحتوى وتحديث الـ Markdown والـ Mermaid
+        function renderContent(element) {
+            element.innerHTML = marked.parse(element.innerText);
+            mermaid.init(undefined, element.querySelectorAll('.mermaid'));
+            element.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+        }
+
+        // مستمع البث المباشر (SSE)
+        function initMirrorListener() {
+            const chatContainer = document.getElementById('chat-container');
+            const source = new EventSource('/api/stream-mirror');
+            let currentMessageDiv = null;
+
+            source.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (!data.content) return;
+
+                // إنشاء فقاعة رسالة جديدة إذا لم توجد
+                if (!currentMessageDiv) {
+                    currentMessageDiv = document.createElement('div');
+                    currentMessageDiv.className = 'message ai-message';
+                    chatContainer.appendChild(currentMessageDiv);
+                }
+
+                // إضافة النص الجديد
+                currentMessageDiv.innerText += data.content;
+                
+                // تحديث العرض لحظياً
+                renderContent(currentMessageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            };
+
+            source.onerror = () => {
+                console.log("إعادة الاتصال بالبث...");
+                setTimeout(initMirrorListener, 3000);
+            };
+        }
+
+        // تشغيل البث عند تحميل الصفحة
+        initMirrorListener();
+    </script>
+    
     <script type="module" src="/static/app.js"></script>
 </body>
 </html>
