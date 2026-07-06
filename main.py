@@ -42,7 +42,8 @@ async def index(request: Request):
 
 @app.post("/api/update-config")
 async def update_config(config: dict):
-    SYSTEM_CONFIG.update(config)
+    data = await request.json()
+    SYSTEM_CONFIG.update(data)
     return {"status": "success"}
 
 @app.get("/api/stream-mirror")
