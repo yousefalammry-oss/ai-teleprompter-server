@@ -63,6 +63,7 @@ async def stream_mirror():
             pass
     return StreamingResponse(mirror_generator(), media_type="text/event-stream")
 
+# تم تصحيح المسار من /api/ إلى /api/chat ليطابق طلبات تطبيقك المكتبي
 @app.post("/api/chat")
 async def chat_endpoint(request: Request):
     try:
@@ -72,7 +73,6 @@ async def chat_endpoint(request: Request):
         if not messages:
             raise HTTPException(status_code=400, detail="No messages provided")
 
-        # دمج البرومت مع آخر 6 رسائل فقط لتوفير التوكنز
         enhanced_messages = [{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages[-6:]
 
         async def stream_generator() -> AsyncGenerator[str, None]:
@@ -89,12 +89,15 @@ async def chat_endpoint(request: Request):
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
-                        full_response += content
+                        # المصحح التلقائي: يمنع دمج mermaidgraph ويجبر السطر الجديد
+                        corrected_content = content.replace("mermaidgraph", "mermaid\ngraph")
+                        
+                        full_response += corrected_content
                         if not broadcast_queue.full():
-                            await broadcast_queue.put(content)
-                        yield f"data: {json.dumps({'content': content})}\n\n"
+                            await broadcast_queue.put(corrected_content)
+                        yield f"data: {json.dumps({'content': corrected_content})}\n\n"
                 
-                # حساب التوكنز: (عدد الكلمات * 1.3) + توكنز البرومت
+                # حساب التوكنز
                 tokens_response = int(len(full_response.split()) * 1.3)
                 tokens_prompt = int(len(json.dumps(enhanced_messages).split()) * 1.3)
                 total_req = tokens_response + tokens_prompt
@@ -104,7 +107,6 @@ async def chat_endpoint(request: Request):
                 
                 logger.info(f"Tokens consumed: {total_req} | Total Daily: {TOTAL_TOKENS_USED}")
                 
-                # إضافة عداد التوكنز لنهاية الرد في المرآة
                 token_msg = f"\n\n---\n*استهلاك التوكن لهذا الطلب: {total_req}*"
                 await broadcast_queue.put(token_msg)
                 
