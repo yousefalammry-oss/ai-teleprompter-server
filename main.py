@@ -59,7 +59,7 @@ async def chat_endpoint(request: Request):
             try:
                 stream = await client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=[{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages,
+                    messages=[{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages[-3:],
                     stream=True,
                     max_tokens=1000
                 )
