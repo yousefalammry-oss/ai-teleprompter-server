@@ -114,6 +114,12 @@
 
                 let code = raw;
 
+                // === إزالة أسوار الكود (```mermaid ... ```) إن وجدت ===
+                // هذا كان سبب المشكلة الظاهرة في الصورة: النص يصل ومعه العلامات
+                // فيفشل mermaid في تفسيره ويظل معروضاً كنص خام
+                code = code.replace(/```mermaid/gi, "");
+                code = code.replace(/```/g, "");
+
                 // تنظيف التسمية الملتصقة بالسيرفر
                 code = code.replace(/mermaidgraph/gi, "graph TD");
 
