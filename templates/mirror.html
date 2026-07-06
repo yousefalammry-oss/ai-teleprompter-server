@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Groq Mirror Pro</title>
     <link rel="stylesheet" href="/static/style.css">
-    <script src="[https://cdn.jsdelivr.net/npm/marked/marked.min.js](https://cdn.jsdelivr.net/npm/marked/marked.min.js)"></script>
-    <script src="[https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js](https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js)"></script>
-    <script src="[https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js](https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js)"></script>
-    <link rel="stylesheet" href="[https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css](https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css)">
+    
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 </head>
 <body class="dark-theme">
 
@@ -31,14 +32,14 @@
     <script>
         let eventSource = null;
 
-        // تهيئة مكتبة Mermaid بشكل مسبق ومنعها من العمل التلقائي
+        // تهيئة مكتبة Mermaid بشكل مسبق ومنعها من العمل التلقائي حتى يكتمل النص
         mermaid.initialize({ 
             startOnLoad: false,
             theme: 'dark',
             securityLevel: 'loose'
         });
 
-        // تخصيص Marked لتحويل كتل كود mermaid إلى وسوم تحمل الكلاس الصحيح للرسم
+        // تخصيص Marked لتحويل كتل كود mermaid إلى وسوم تفاعلية
         const renderer = new marked.Renderer();
         renderer.code = function({ text, lang }) {
             if (lang === 'mermaid') {
@@ -58,7 +59,7 @@
             if (response.ok) alert("تم تحديث الإعدادات!");
         }
 
-        // دالة عرض وتحديث المحتوى أثناء البث (تتعامل مع النص فقط لمنع تلف عناصر الفرونت إند)
+        // دالة عرض وتحديث المحتوى النصي أثناء البث
         function renderStreamingContent(element, rawText) {
             element.innerHTML = marked.parse(rawText);
             element.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
@@ -89,7 +90,7 @@
             eventSource = new EventSource('/api/stream-mirror');
             
             let currentMessageDiv = null;
-            let accumulatedText = ""; // لتخزين النص الخام القادم من الـ Stream بشكل آمن
+            let accumulatedText = ""; 
 
             eventSource.onmessage = async (event) => {
                 let data;
@@ -99,10 +100,8 @@
                     return;
                 }
                 
-                // عند اكتمال استلام النص بالكامل [DONE]
                 if (data.content === "[DONE]" || data.content === "[DONE]\n\n") {
                     if (currentMessageDiv) {
-                        // إطلاق أمر مكتبة ميرميد لتحويل الكود النصي إلى رسمة تفاعلية فوراً
                         await finalizeRender(currentMessageDiv);
                     }
                     currentMessageDiv = null;
@@ -119,12 +118,8 @@
                     accumulatedText = "";
                 }
 
-                // تجميع النص الخام المحدث
                 accumulatedText += data.content;
-                
-                // عرض النص كـ Markdown أثناء تدفقه
                 renderStreamingContent(currentMessageDiv, accumulatedText);
-                
                 chatContainer.scrollTop = chatContainer.scrollHeight;
             };
 
