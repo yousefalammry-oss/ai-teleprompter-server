@@ -21,13 +21,13 @@ if not GROQ_API_KEY:
 
 app = FastAPI(title="Groq Mirror Professional")
 
-# إعدادات النظام القابلة للتحديث
+# إعدادات النظام
 SYSTEM_CONFIG = {
     "base_prompt": "أنت خبير في إنشاء الرسوم البيانية. استخدم كود Mermaid حصراً داخل ```mermaid [الكود] ```. ممنوع استخدام رسومات ASCII نهائياً."
 }
 
-# الوسيط (Mediator) لنقل البيانات
-broadcast_queue = asyncio.Queue()
+# استخدام Queue مع حجم محدود لمنع تراكم البيانات (Buffer Overflow)
+broadcast_queue = asyncio.Queue(maxsize=50)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -44,7 +44,6 @@ logger = logging.getLogger(__name__)
 async def index(request: Request):
     return templates.TemplateResponse("mirror.html", {"request": request})
 
-# مسار تحديث الإعدادات
 @app.post("/api/update-config")
 async def update_config(config: dict):
     SYSTEM_CONFIG.update(config)
@@ -53,9 +52,14 @@ async def update_config(config: dict):
 @app.get("/api/stream-mirror")
 async def stream_mirror():
     async def mirror_generator():
-        while True:
-            content = await broadcast_queue.get()
-            yield f"data: {json.dumps({'content': content})}\n\n"
+        try:
+            while True:
+                # انتظار البيانات من الـ Queue
+                content = await broadcast_queue.get()
+                yield f"data: {json.dumps({'content': content})}\n\n"
+        except asyncio.CancelledError:
+            # يتم استدعاء هذا عند إغلاق المتصفح (المهم جداً لوقف الاستهلاك)
+            pass
     return StreamingResponse(mirror_generator(), media_type="text/event-stream")
 
 @app.post("/api/chat")
@@ -67,7 +71,7 @@ async def chat_endpoint(request: Request):
         if not messages:
             raise HTTPException(status_code=400, detail="No messages provided")
 
-        # دمج البرومت مع الرسائل (مع تقليم التاريخ لآخر 6 رسائل فقط لتوفير التوكنز)
+        # دمج البرومت مع آخر 6 رسائل فقط
         enhanced_messages = [{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages[-6:]
 
         async def stream_generator() -> AsyncGenerator[str, None]:
@@ -77,17 +81,18 @@ async def chat_endpoint(request: Request):
                     messages=enhanced_messages,
                     stream=True,
                     temperature=0.7,
-                    max_tokens=2000 # تم تقليل الـ tokens لتوفير الحصة اليومية
+                    max_tokens=2000
                 )
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
-                        await broadcast_queue.put(content)
+                        # إضافة البيانات للـ Queue
+                        if not broadcast_queue.full():
+                            await broadcast_queue.put(content)
                         yield f"data: {json.dumps({'content': content})}\n\n"
                 
                 await broadcast_queue.put("[DONE]")
                 yield "data: [DONE]\n\n"
-                logger.info("Request finished successfully.")
             except Exception as e:
                 logger.error(f"Streaming error: {str(e)}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
@@ -95,11 +100,7 @@ async def chat_endpoint(request: Request):
         return StreamingResponse(
             stream_generator(),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"
-            }
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
         )
     except Exception as e:
         logger.error(f"Endpoint error: {str(e)}")
