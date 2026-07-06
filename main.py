@@ -26,8 +26,11 @@ SYSTEM_CONFIG = {
     "base_prompt": "أنت خبير في إنشاء الرسوم البيانية. استخدم كود Mermaid حصراً داخل ```mermaid [الكود] ```. ممنوع استخدام رسومات ASCII نهائياً."
 }
 
-# استخدام Queue مع حجم محدود لمنع تراكم البيانات (Buffer Overflow)
-broadcast_queue = asyncio.Queue(maxsize=50)
+# عداد التوكنز الكلي
+TOTAL_TOKENS_USED = 0
+
+# استخدام Queue مع حجم محدود لمنع تراكم البيانات
+broadcast_queue = asyncio.Queue(maxsize=100)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -54,11 +57,9 @@ async def stream_mirror():
     async def mirror_generator():
         try:
             while True:
-                # انتظار البيانات من الـ Queue
                 content = await broadcast_queue.get()
                 yield f"data: {json.dumps({'content': content})}\n\n"
         except asyncio.CancelledError:
-            # يتم استدعاء هذا عند إغلاق المتصفح (المهم جداً لوقف الاستهلاك)
             pass
     return StreamingResponse(mirror_generator(), media_type="text/event-stream")
 
@@ -71,7 +72,7 @@ async def chat_endpoint(request: Request):
         if not messages:
             raise HTTPException(status_code=400, detail="No messages provided")
 
-        # دمج البرومت مع آخر 6 رسائل فقط
+        # دمج البرومت مع آخر 6 رسائل فقط لتوفير التوكنز
         enhanced_messages = [{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages[-6:]
 
         async def stream_generator() -> AsyncGenerator[str, None]:
@@ -83,16 +84,33 @@ async def chat_endpoint(request: Request):
                     temperature=0.7,
                     max_tokens=2000
                 )
+                
+                full_response = ""
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
-                        # إضافة البيانات للـ Queue
+                        full_response += content
                         if not broadcast_queue.full():
                             await broadcast_queue.put(content)
                         yield f"data: {json.dumps({'content': content})}\n\n"
                 
+                # حساب التوكنز: (عدد الكلمات * 1.3) + توكنز البرومت
+                tokens_response = int(len(full_response.split()) * 1.3)
+                tokens_prompt = int(len(json.dumps(enhanced_messages).split()) * 1.3)
+                total_req = tokens_response + tokens_prompt
+                
+                global TOTAL_TOKENS_USED
+                TOTAL_TOKENS_USED += total_req
+                
+                logger.info(f"Tokens consumed: {total_req} | Total Daily: {TOTAL_TOKENS_USED}")
+                
+                # إضافة عداد التوكنز لنهاية الرد في المرآة
+                token_msg = f"\n\n---\n*استهلاك التوكن لهذا الطلب: {total_req}*"
+                await broadcast_queue.put(token_msg)
+                
                 await broadcast_queue.put("[DONE]")
                 yield "data: [DONE]\n\n"
+                
             except Exception as e:
                 logger.error(f"Streaming error: {str(e)}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
