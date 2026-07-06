@@ -62,7 +62,16 @@ async def chat_endpoint(request: Request):
         messages = data.get("messages", [])[-3:]
         
         async def stream_generator() -> AsyncGenerator[str, None]:
-            try:
+    try:
+        logger.info("=" * 50)
+        logger.info(f"Messages count: {len(messages)}")
+
+        for i, msg in enumerate(messages):
+            logger.info(
+                f"{i+1}. {msg['role']} -> {len(msg['content'])} characters"
+            )
+
+        logger.info("=" * 50)
                 stream = await client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=[{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages,
