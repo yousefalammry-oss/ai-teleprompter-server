@@ -95,13 +95,14 @@ async def health_check() -> Dict[str, str]:
     return {"status": "healthy"}
 
 @app.post("/api/update-config", status_code=status.HTTP_200_OK)
+@app.post("/api/update-config", status_code=status.HTTP_200_OK)
 async def update_system_configuration(config: Dict[str, Any]) -> Dict[str, Any]:
     new_prompt = config.get("base_prompt")
+    
     if new_prompt is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing payload attribute: 'base_prompt' field is required."
-        )
+            detail="Missing payload attribute: 'base_prompt' field is required."    )
     
     SYSTEM_CONFIG["base_prompt"] = str(new_prompt)
     logger.info(f"Configuration updated. New base prompt: {SYSTEM_CONFIG['base_prompt']}")
