@@ -18,7 +18,7 @@ logger = logging.getLogger("groq_mirror")
 load_dotenv()
 
 # إعدادات Groq
-API_KEY = os.getenv("GROQ_API_KEY")
+API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.groq.com/openai/v1"
 MODEL_NAME = "llama-3.3-8b-instant"
 
