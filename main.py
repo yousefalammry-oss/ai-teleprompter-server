@@ -15,7 +15,6 @@ load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MODEL_NAME = "llama-3.3-8b-instant" 
-
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY is not set.")
 
@@ -58,6 +57,7 @@ async def stream_mirror():
 @app.post("/api/chat")
 async def chat_endpoint(request: Request):
     try:
+        logger.info(f"Using model: {MODEL_NAME}")
         data = await request.json()
         messages = data.get("messages", [])[-3:]
         
@@ -76,8 +76,7 @@ async def chat_endpoint(request: Request):
                     model=MODEL_NAME,
                     messages=[{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages,
                     stream=True,
-                    max_tokens=1000
-                )
+                        max_tokens=1024                )
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
