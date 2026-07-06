@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI, APIError
 from dotenv import load_dotenv
 import uvicorn
+import re
 
 # -----------------------------------------------------------------------------
 # LOGGING CONFIGURATION
@@ -79,24 +80,26 @@ client = AsyncOpenAI(base_url=BASE_URL, api_key=GROQ_API_KEY)
 # -----------------------------------------------------------------------------
 def sanitize_mermaid_syntax(text: str) -> str:
     """
-    تنظيف وتصحيح الأخطاء الشائعة في كود ميرميد لضمان إمكانية رسمه مباشرة.
+    نسخة احترافية متقدمة لتنظيف ومعالجة كود Mermaid التالف وفصل العلاقات المدمجة بأسطر جديدة.
     """
     if not text:
         return text
     
-    # تصحيح الالتصاق بجميع أشكاله (TB أو TD أو LR)
-    text = text.replace("mermaidgraph TB", "mermaid\ngraph TB")
-    text = text.replace("mermaidgraph TD", "mermaid\ngraph TD")
-    text = text.replace("mermaidgraph LR", "mermaid\ngraph LR")
-    text = text.replace("mermaidgraph", "mermaid\ngraph")
+    # 1. تصحيح الكلمات الملتصقة بالمؤشرات الأساسية
+    text = re.sub(r'mermaidgraph\s*(TB|TD|LR|BT)', r'mermaid\ngraph \1', text)
+    text = text.replace("mermaidgraph", "mermaid\ngraph TD")
+    text = text.replace("```mermaidgraph", "```mermaid\ngraph TD")
     
-    text = text.replace("```mermaidgraph TB", "```mermaid\ngraph TB")
-    text = text.replace("```mermaidgraph TD", "```mermaid\ngraph TD")
-    text = text.replace("```mermaidgraph LR", "```mermaid\ngraph LR")
-    text = text.replace("```mermaidgraph", "```mermaid\ngraph")
+    # 2. تصحيح دمج العلاقات (مثال: تحويل text] A --> B إلى سطرين منفصلين)
+    # يبحث عن الأنماط التي تنتهي بـ ] أو ) متبوعة مباشرة باسم متغير جديد وعلاقة
+    text = re.sub(r'(\])\s*([A-Za-z0-9_]+)(\[|\()', r'\1\n\2\3', text)
+    
+    # 3. إجبار فصل الأسهم المدمجة في نفس السطر بأسطر جديدة
+    # تحويل من النمط: Node1-->Node2 Node3-->Node4 إلى سطرين منفصلين
+    text = re.sub(r'(\S+-->\S+)\s+([A-Za-z0-9_]+-->)', r'\1\n\2', text)
+    text = re.sub(r'(\S+-\s*>\s*>\S+)\s+([A-Za-z0-9_]+-\s*>\s*>)', r'\1\n\2', text)
     
     return text
-
 async def safely_enqueue_broadcast(content: str) -> None:
     """
     Attempts to place content into the global broadcast queue.
