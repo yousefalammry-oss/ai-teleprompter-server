@@ -44,13 +44,12 @@ logger = logging.getLogger(__name__)
 async def index(request: Request):
     return templates.TemplateResponse("mirror.html", {"request": request})
 
-# مسار تحديث الإعدادات من واجهة المرآة
+# مسار تحديث الإعدادات
 @app.post("/api/update-config")
 async def update_config(config: dict):
     SYSTEM_CONFIG.update(config)
     return {"status": "success", "config": SYSTEM_CONFIG}
 
-# المسار لبث البيانات للمرآة
 @app.get("/api/stream-mirror")
 async def stream_mirror():
     async def mirror_generator():
@@ -68,8 +67,8 @@ async def chat_endpoint(request: Request):
         if not messages:
             raise HTTPException(status_code=400, detail="No messages provided")
 
-        # دمج برومت النظام مع رسائل المستخدم
-        enhanced_messages = [{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages
+        # دمج البرومت مع الرسائل (مع تقليم التاريخ لآخر 6 رسائل فقط لتوفير التوكنز)
+        enhanced_messages = [{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages[-6:]
 
         async def stream_generator() -> AsyncGenerator[str, None]:
             try:
@@ -78,7 +77,7 @@ async def chat_endpoint(request: Request):
                     messages=enhanced_messages,
                     stream=True,
                     temperature=0.7,
-                    max_tokens=8192
+                    max_tokens=2000 # تم تقليل الـ tokens لتوفير الحصة اليومية
                 )
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
@@ -88,6 +87,7 @@ async def chat_endpoint(request: Request):
                 
                 await broadcast_queue.put("[DONE]")
                 yield "data: [DONE]\n\n"
+                logger.info("Request finished successfully.")
             except Exception as e:
                 logger.error(f"Streaming error: {str(e)}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
