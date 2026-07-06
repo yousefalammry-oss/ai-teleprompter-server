@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-# تغيير الموديل إلى الإصدار السريع لتوفير الاستهلاك
 MODEL_NAME = "llama-3.3-8b-instant" 
 
 if not GROQ_API_KEY:
@@ -21,11 +20,12 @@ if not GROQ_API_KEY:
 
 app = FastAPI(title="Groq Mirror Professional")
 
+# الوسيط لنقل البيانات بين الشات والمرآة
+broadcast_queue = asyncio.Queue(maxsize=10)
+
 SYSTEM_CONFIG = {
     "base_prompt": "You are a Mermaid generator. Rules: Start with ```mermaid, then a new line, then graph TD/LR. Never combine mermaid and graph."
 }
-
-broadcast_queue = asyncio.Queue(maxsize=10) # تقليل الحجم لمنع التراكم
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
@@ -39,11 +39,21 @@ logger = logging.getLogger(__name__)
 async def index(request: Request):
     return templates.TemplateResponse("mirror.html", {"request": request})
 
+# المسار المفقود الذي كان يسبب 404
+@app.get("/api/stream-mirror")
+async def stream_mirror():
+    async def generator():
+        while True:
+            # انتظار بيانات جديدة من الـ Queue
+            content = await broadcast_queue.get()
+            yield f"data: {json.dumps({'content': content})}\n\n"
+    return StreamingResponse(generator(), media_type="text/event-stream")
+
 @app.post("/api/chat")
 async def chat_endpoint(request: Request):
     try:
         data = await request.json()
-        messages = data.get("messages", [])[-3:] # أخذ آخر 3 رسائل فقط لتقليل التوكنز
+        messages = data.get("messages", [])[-3:]
         
         async def stream_generator() -> AsyncGenerator[str, None]:
             try:
@@ -51,13 +61,15 @@ async def chat_endpoint(request: Request):
                     model=MODEL_NAME,
                     messages=[{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages,
                     stream=True,
-                    max_tokens=1000 # تقليل الحد الأقصى للنصف
+                    max_tokens=1000
                 )
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
-                        # تصحيح فوري للنص
                         corrected = content.replace("mermaidgraph", "mermaid\ngraph")
+                        # إرسال البيانات للـ Queue ليتم بثها للمرآة
+                        if not broadcast_queue.full():
+                            await broadcast_queue.put(corrected)
                         yield f"data: {json.dumps({'content': corrected})}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as e:
