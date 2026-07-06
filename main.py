@@ -21,7 +21,12 @@ if not GROQ_API_KEY:
 
 app = FastAPI(title="Groq Mirror Professional")
 
-# الوسيط (Mediator) لنقل البيانات بين الـ API والـ Mirror
+# إعدادات النظام القابلة للتحديث
+SYSTEM_CONFIG = {
+    "base_prompt": "أنت خبير في إنشاء الرسوم البيانية. استخدم كود Mermaid حصراً داخل ```mermaid [الكود] ```. ممنوع استخدام رسومات ASCII نهائياً."
+}
+
+# الوسيط (Mediator) لنقل البيانات
 broadcast_queue = asyncio.Queue()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -39,12 +44,17 @@ logger = logging.getLogger(__name__)
 async def index(request: Request):
     return templates.TemplateResponse("mirror.html", {"request": request})
 
-# المسار الجديد لبث البيانات للمرآة
+# مسار تحديث الإعدادات من واجهة المرآة
+@app.post("/api/update-config")
+async def update_config(config: dict):
+    SYSTEM_CONFIG.update(config)
+    return {"status": "success", "config": SYSTEM_CONFIG}
+
+# المسار لبث البيانات للمرآة
 @app.get("/api/stream-mirror")
 async def stream_mirror():
     async def mirror_generator():
         while True:
-            # انتظار أي نص جديد يصل للـ Queue
             content = await broadcast_queue.get()
             yield f"data: {json.dumps({'content': content})}\n\n"
     return StreamingResponse(mirror_generator(), media_type="text/event-stream")
@@ -58,11 +68,14 @@ async def chat_endpoint(request: Request):
         if not messages:
             raise HTTPException(status_code=400, detail="No messages provided")
 
+        # دمج برومت النظام مع رسائل المستخدم
+        enhanced_messages = [{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages
+
         async def stream_generator() -> AsyncGenerator[str, None]:
             try:
                 stream = await client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=messages,
+                    messages=enhanced_messages,
                     stream=True,
                     temperature=0.7,
                     max_tokens=8192
@@ -70,15 +83,11 @@ async def chat_endpoint(request: Request):
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
-                        # 1. إرسال للمرآة فوراً
                         await broadcast_queue.put(content)
-                        # 2. إرسال للتطبيق المكتبي
                         yield f"data: {json.dumps({'content': content})}\n\n"
                 
-                # إرسال إشارة الانتهاء للمرآة وللتطبيق المكتبي
                 await broadcast_queue.put("[DONE]")
                 yield "data: [DONE]\n\n"
-                
             except Exception as e:
                 logger.error(f"Streaming error: {str(e)}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
