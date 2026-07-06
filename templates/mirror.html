@@ -136,8 +136,26 @@
                 code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
                 code = code.replace(/end\s+end/gi, "end");
 
+                // === إصلاح استخدام "end" كاسم عقدة بدل خاتمة subgraph ===
+                // لو "end" جاءت بعد سهم (مباشرة أو بعد |label|) فهي هدف وليست خاتمة، فنعيد تسميتها
+                code = code.replace(/(-->\s*(?:\|[^|]*\|)?\s*)end\b/gi, "$1EndNode");
+
                 // فصل كلمة "end" الخاصة بإغلاق subgraph عن العقدة التالية لها إن التصقت
                 code = code.replace(/\bend\b(?=\S)/gi, "end\n");
+
+                // === إصلاح إعادة تعريف نفس العقدة بلاصقتين مختلفتين ===
+                // mermaid لا يقبل تعريف نفس المعرف أكثر من مرة بمحتوى مختلف
+                // نُبقي أول تعريف فقط ونحذف اللاصقة من أي تكرار لاحق لنفس المعرف
+                {
+                    const seenNodeIds = new Set();
+                    code = code.replace(/([A-Za-z0-9_]+)(\[[^\]]*\]|\([^\)]*\))/g, (match, id, label) => {
+                        if (seenNodeIds.has(id)) {
+                            return id; // إبقاء المعرف فقط، حذف إعادة التعريف
+                        }
+                        seenNodeIds.add(id);
+                        return match;
+                    });
+                }
 
                 code = code.split('\n')
                            .map(line => line.trim())
