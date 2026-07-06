@@ -2,10 +2,9 @@ import os
 import json
 import logging
 import asyncio
-import re
 from typing import AsyncGenerator, Dict, Any, List
 from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,7 +35,7 @@ if not GROQ_API_KEY:
 MODEL_NAME = "llama-3.3-8b-instant"
 BASE_URL = "https://api.groq.com/openai/v1"
 
-# In-memory shared configuration (Thread-safe via simple updates)
+# In-memory shared configuration
 SYSTEM_CONFIG: Dict[str, str] = {
     "base_prompt": (
         "You are a Mermaid generator. Rules:\n"
@@ -69,7 +68,6 @@ app.add_middleware(
 broadcast_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10)
 
 # Mount statics and templates safely
-# Note: Ensure directories exist in production path
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -86,7 +84,6 @@ def sanitize_mermaid_syntax(text: str) -> str:
     """
     if not text:
         return text
-    # Fix instances where the model joins the keyword or fence string directly
     text = text.replace("mermaidgraph", "mermaid\ngraph")
     text = text.replace("```mermaidgraph", "```mermaid\ngraph")
     return text
@@ -156,7 +153,6 @@ async def stream_mirror_events() -> StreamingResponse:
     async def mirror_event_generator() -> AsyncGenerator[str, None]:
         try:
             while True:
-                # Continuous blocking loop awaiting payload deliveries within the queue instance
                 content = await broadcast_queue.get()
                 payload = json.dumps({"content": content})
                 yield f"data: {payload}\n\n"
@@ -171,7 +167,7 @@ async def stream_mirror_events() -> StreamingResponse:
         "Cache-Control": "no-cache, no-transform",
         "Connection": "keep-alive",
         "Content-Type": "text/event-stream",
-        "X-Accel-Buffering": "no"  # Disable buffering in reverse proxies such as Nginx
+        "X-Accel-Buffering": "no"
     }
     return StreamingResponse(mirror_event_generator(), media_type="text/event-stream", headers=headers)
 
@@ -181,7 +177,6 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
     Processes chat prompts, truncates history contexts to save processing cost overhead tokens,
     communicates downstream with the Groq API infrastructure, and returns an optimized SSE chunk stream.
     """
-    # 1. Parse and Validate Request JSON Data Structures
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -193,8 +188,7 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
         logger.warning("POST /api/chat - Missing validation rule elements inside input structure.")
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Parameter field 'messages' must be a populated array.")
 
-    # 2. Extract, Token Optimize History Context & Inject Target Base Instructions
-    # Truncate and pin strictly to the last 3 conversation segments to prevent history bloom costs
+    # Only keep the last 3 messages for history token optimization
     optimized_history = raw_messages[-3:]
     
     logger.info("=" * 60)
@@ -206,7 +200,7 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
         logger.info(f" [{idx + 1}] Role: '{role}' -> Magnitude: {content_len} characters.")
     logger.info("=" * 60)
 
-    # Reconstruct transaction message payloads using global dynamic context tracking settings
+    # Prepend system prompt
     compiled_messages = [{"role": "system", "content": SYSTEM_CONFIG["base_prompt"]}]
     for msg in optimized_history:
         compiled_messages.append({
@@ -214,10 +208,8 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
             "content": str(msg.get("content", ""))
         })
 
-    # 3. Handle External Async Core Stream Orchestration Engine Generator
     async def chat_sse_stream_generator() -> AsyncGenerator[str, None]:
         try:
-            # Query external low-latency Groq matrix nodes utilizing precise token limiting parameters
             response_stream = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=compiled_messages,
@@ -233,16 +225,12 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
                 
                 delta_content = chunk.choices[0].delta.content
                 if delta_content:
-                    # Sanitize structural errors inside current chunk stream segment arrays
+                    # Automatically fix mermaid syntax
                     processed_token = sanitize_mermaid_syntax(delta_content)
                     
-                    # Push downstream forward token contents into synchronization mirror queues asynchronously
                     await safely_enqueue_broadcast(processed_token)
-                    
-                    # Yield SSE formatted data out onto connected client connections
                     yield f"data: {json.dumps({'content': processed_token})}\n\n"
             
-            # Send terminal signaling parameters out across client nodes to indicate logical boundaries
             yield "data: [DONE]\n\n"
             logger.info("POST /api/chat - Downstream streaming pipeline transmission completed successfully.")
             
@@ -258,7 +246,6 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
             logger.error(f"Unmanaged operational structural crash during runtime chunk sequences: {str(general_err)}")
             yield f"data: {json.dumps({'error': 'Internal operational execution matrix failure occurred.'})}\n\n"
 
-    # 4. Construct Web Context Packaging Streams Using Strict SSE Response Configurations
     custom_headers = {
         "Cache-Control": "no-cache, no-transform",
         "Connection": "keep-alive",
@@ -271,7 +258,6 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
 # APPLICATION ENTRYPOINT EXECUTION ARCHITECTURE
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Fallback to port 8000 default assignments unless injected from system environments
     target_port = int(os.getenv("PORT", 8000))
     logger.info(f"Spinning up production ASGI web server pipeline on interface binding 0.0.0.0:{target_port}")
     uvicorn.run(
