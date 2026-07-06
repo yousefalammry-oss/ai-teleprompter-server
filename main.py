@@ -10,35 +10,27 @@ from fastapi.templating import Jinja2Templates
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-MODEL_NAME = "llama-3.3-70b-versatile"
+# تغيير الموديل إلى الإصدار السريع لتوفير الاستهلاك
+MODEL_NAME = "llama-3.3-8b-instant" 
 
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY is not set.")
 
 app = FastAPI(title="Groq Mirror Professional")
 
-# إعدادات النظام
 SYSTEM_CONFIG = {
-    "base_prompt": "أنت خبير في إنشاء الرسوم البيانية. استخدم كود Mermaid حصراً داخل ```mermaid [الكود] ```. ممنوع استخدام رسومات ASCII نهائياً."
+    "base_prompt": "You are a Mermaid generator. Rules: Start with ```mermaid, then a new line, then graph TD/LR. Never combine mermaid and graph."
 }
 
-# عداد التوكنز الكلي
-TOTAL_TOKENS_USED = 0
-
-# استخدام Queue مع حجم محدود لمنع تراكم البيانات
-broadcast_queue = asyncio.Queue(maxsize=100)
+broadcast_queue = asyncio.Queue(maxsize=10) # تقليل الحجم لمنع التراكم
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-client = AsyncOpenAI(
-    base_url="https://api.groq.com/openai/v1",
-    api_key=GROQ_API_KEY
-)
+client = AsyncOpenAI(base_url="[https://api.groq.com/openai/v1](https://api.groq.com/openai/v1)", api_key=GROQ_API_KEY)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,83 +39,32 @@ logger = logging.getLogger(__name__)
 async def index(request: Request):
     return templates.TemplateResponse("mirror.html", {"request": request})
 
-@app.post("/api/update-config")
-async def update_config(config: dict):
-    SYSTEM_CONFIG.update(config)
-    return {"status": "success", "config": SYSTEM_CONFIG}
-
-@app.get("/api/stream-mirror")
-async def stream_mirror():
-    async def mirror_generator():
-        try:
-            while True:
-                content = await broadcast_queue.get()
-                yield f"data: {json.dumps({'content': content})}\n\n"
-        except asyncio.CancelledError:
-            pass
-    return StreamingResponse(mirror_generator(), media_type="text/event-stream")
-
-# تم تصحيح المسار من /api/ إلى /api/chat ليطابق طلبات تطبيقك المكتبي
 @app.post("/api/chat")
 async def chat_endpoint(request: Request):
     try:
         data = await request.json()
-        messages = data.get("messages", [])
+        messages = data.get("messages", [])[-3:] # أخذ آخر 3 رسائل فقط لتقليل التوكنز
         
-        if not messages:
-            raise HTTPException(status_code=400, detail="No messages provided")
-
-        enhanced_messages = [{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages[-6:]
-
         async def stream_generator() -> AsyncGenerator[str, None]:
             try:
                 stream = await client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=enhanced_messages,
+                    messages=[{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages,
                     stream=True,
-                    temperature=0.7,
-                    max_tokens=2000
+                    max_tokens=1000 # تقليل الحد الأقصى للنصف
                 )
-                
-                full_response = ""
                 async for chunk in stream:
                     content = chunk.choices[0].delta.content
                     if content:
-                        # المصحح التلقائي: يمنع دمج mermaidgraph ويجبر السطر الجديد
-                        corrected_content = content.replace("mermaidgraph", "mermaid\ngraph")
-                        
-                        full_response += corrected_content
-                        if not broadcast_queue.full():
-                            await broadcast_queue.put(corrected_content)
-                        yield f"data: {json.dumps({'content': corrected_content})}\n\n"
-                
-                # حساب التوكنز
-                tokens_response = int(len(full_response.split()) * 1.3)
-                tokens_prompt = int(len(json.dumps(enhanced_messages).split()) * 1.3)
-                total_req = tokens_response + tokens_prompt
-                
-                global TOTAL_TOKENS_USED
-                TOTAL_TOKENS_USED += total_req
-                
-                logger.info(f"Tokens consumed: {total_req} | Total Daily: {TOTAL_TOKENS_USED}")
-                
-                token_msg = f"\n\n---\n*استهلاك التوكن لهذا الطلب: {total_req}*"
-                await broadcast_queue.put(token_msg)
-                
-                await broadcast_queue.put("[DONE]")
+                        # تصحيح فوري للنص
+                        corrected = content.replace("mermaidgraph", "mermaid\ngraph")
+                        yield f"data: {json.dumps({'content': corrected})}\n\n"
                 yield "data: [DONE]\n\n"
-                
             except Exception as e:
-                logger.error(f"Streaming error: {str(e)}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
-        return StreamingResponse(
-            stream_generator(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
-        )
+        return StreamingResponse(stream_generator(), media_type="text/event-stream")
     except Exception as e:
-        logger.error(f"Endpoint error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
