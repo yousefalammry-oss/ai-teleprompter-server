@@ -2,36 +2,33 @@ import os
 import json
 import logging
 import asyncio
-from typing import AsyncGenerator, Dict, Any, List
+from typing import Dict, Any
 from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.responses import StreamingResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from openai import AsyncOpenAI, APIError
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import uvicorn
 
 # -----------------------------------------------------------------------------
-# LOGGING CONFIGURATION
+# CONFIGURATION
 # -----------------------------------------------------------------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logger = logging.getLogger("openai_json_mirror")
-
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("groq_mirror")
 load_dotenv()
 
-# اختيار الموديل والمفتاح بناءً على الإعدادات المتوفرة
-API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
-BASE_URL = "https://api.groq.com/openai/v1" if os.getenv("GROQ_API_KEY") else "https://api.openai.com/v1"
-MODEL_NAME = "llama-3.3-8b-instant" if os.getenv("GROQ_API_KEY") else "gpt-4o-mini"
+# إعدادات Groq
+API_KEY = os.getenv("GROQ_API_KEY")
+BASE_URL = "https://api.groq.com/openai/v1"
+MODEL_NAME = "llama-3.3-8b-instant"
 
 if not API_KEY:
-    raise ValueError("لا يوجد API KEY معرّف في إعدادات البيئة!")
+    raise ValueError("GROQ_API_KEY غير موجود في إعدادات البيئة!")
 
 # -----------------------------------------------------------------------------
 # INITIALIZATION
 # -----------------------------------------------------------------------------
-app = FastAPI(title="Pro JSON Mirror")
+app = FastAPI(title="Groq Mirror API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
@@ -41,30 +38,24 @@ SYSTEM_CONFIG = {"base_prompt": "You are a strict Mermaid diagram generator. Res
 # ENDPOINTS
 # -----------------------------------------------------------------------------
 
-@app.post("/api/update-config", status_code=status.HTTP_200_OK)
+@app.post("/api/update-config")
 async def update_system_configuration(config: Dict[str, Any]):
     new_prompt = config.get("base_prompt")
     if not new_prompt:
         raise HTTPException(status_code=400, detail="Missing base_prompt")
     SYSTEM_CONFIG["base_prompt"] = str(new_prompt)
-    return {"status": "success", "new_config": SYSTEM_CONFIG}
+    return {"status": "success"}
 
 @app.post("/api/chat")
 async def process_chat_stream(request: Request) -> StreamingResponse:
     body = await request.json()
     raw_messages = body.get("messages", [])
     
-    strict_json_prompt = (
-        f"{SYSTEM_CONFIG['base_prompt']}\n"
-        "Respond strictly with JSON schema: {\"mermaid_code\": \"...\", \"explanation\": \"...\"}"
-    )
-
-    compiled_messages = [{"role": "system", "content": strict_json_prompt}] + raw_messages[-3:]
+    # تحضير الرسائل
+    compiled_messages = [{"role": "system", "content": f"{SYSTEM_CONFIG['base_prompt']} Return JSON only."}] + raw_messages[-3:]
 
     async def chat_sse_stream_generator():
         try:
-            # ملاحظة: Groq لا يدعم response_format={"type": "json_object"} في بعض الموديلات
-            # لذا سنعتمد على البرومبت الصارم
             response = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=compiled_messages,
@@ -72,7 +63,7 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
             )
             
             raw_content = response.choices[0].message.content
-            # تنظيف الرد من علامات الكود إذا وجدت
+            # تنظيف الـ JSON
             clean_json = raw_content.replace("```json", "").replace("```", "").strip()
             parsed = json.loads(clean_json)
             
