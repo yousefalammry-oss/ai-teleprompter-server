@@ -9,7 +9,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI, APIError
-from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import uvicorn
 
@@ -21,7 +20,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler()]
 )
-logger = logging.getLogger("openai_structured_mirror")
+logger = logging.getLogger("openai_json_mirror")
 
 # -----------------------------------------------------------------------------
 # ENVIRONMENT & CONFIGURATION
@@ -35,7 +34,7 @@ if not OPENAI_API_KEY:
 
 MODEL_NAME = "gpt-4o-mini"
 
-# الـ System Prompt الأساسي الموجه لهندسة الرسومات البيانية
+# الـ System Prompt المحسن لإنتاج رسومات بيانية صحيحة
 SYSTEM_CONFIG: Dict[str, str] = {
     "base_prompt": (
         "You are an expert systems architect and strict Mermaid diagram generator.\n"
@@ -44,18 +43,13 @@ SYSTEM_CONFIG: Dict[str, str] = {
     )
 }
 
-# تعريف قالب الـ JSON الصارم الذي يجبر الذكاء الاصطناعي على الالتزام بالبنية المطلوبة
-class DiagramResponse(BaseModel):
-    mermaid_code: str = Field(description="The complete, valid and beautifully indented Mermaid diagram code starting with graph TD or LR.")
-    explanation: str = Field(description="Brief textual overview or description of the diagram architecture.")
-
 # -----------------------------------------------------------------------------
 # INITIALIZATION
 # -----------------------------------------------------------------------------
 app = FastAPI(
-    title="OpenAI Structured Mirror Pro",
-    version="2.0.0",
-    description="FastAPI middleware serving rigid JSON structured outputs via OpenAI API."
+    title="OpenAI JSON Mirror Pro",
+    version="2.1.0",
+    description="FastAPI middleware serving production-ready strict JSON responses via OpenAI API."
 )
 
 app.add_middleware(
@@ -150,10 +144,20 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
     optimized_history = raw_messages[-3:]
     
     logger.info("=" * 60)
-    logger.info(f"Pipeline Engine: OpenAI (Structured Output Mode) -> {MODEL_NAME}")
+    logger.info(f"Pipeline Engine: OpenAI (Strict JSON Mode) -> {MODEL_NAME}")
     logger.info("=" * 60)
 
-    compiled_messages = [{"role": "system", "content": SYSTEM_CONFIG["base_prompt"]}]
+    # إجبار الموديل على الالتزام ببنية الـ JSON مع تحديد الحقول المطلوبة
+    strict_json_prompt = (
+        f"{SYSTEM_CONFIG['base_prompt']}\n\n"
+        "CRITICAL: You MUST respond with a raw JSON object matching this schema:\n"
+        "{\n"
+        "  \"mermaid_code\": \"The complete, valid and beautifully indented Mermaid diagram code starting with graph TD or LR.\",\n"
+        "  \"explanation\": \"Brief textual overview or description of the diagram architecture.\"\n"
+        "}"
+    )
+
+    compiled_messages = [{"role": "system", "content": strict_json_prompt}]
     for msg in optimized_history:
         compiled_messages.append({
             "role": msg.get("role", "user"),
@@ -162,30 +166,35 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
 
     async def chat_sse_stream_generator() -> AsyncGenerator[str, None]:
         try:
-            # الاعتماد على معالج الاستجابة المهيكلة المتقدم لمنع مشاكل تقطيع وفقدان الأسطر
-            response = await client.beta.chat.completions.parse(
+            # استخدام الطريقة القياسية المستقرة والمتوافقة مع كافة إصدارات openai
+            response = await client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=compiled_messages,
-                response_format=DiagramResponse,
+                response_format={"type": "json_object"},  # تفعيل نمط الـ JSON الإجباري
                 temperature=0.1
             )
             
-            parsed_response = response.choices[0].message.parsed
-            if parsed_response:
-                # استخراج الكود البرمجي الصافي والمضمون هندسياً
-                final_mermaid = parsed_response.mermaid_code
+            raw_content = response.choices[0].message.content
+            if raw_content:
+                # معالجة وتفكيك الـ JSON المستلم لاستخراج الكود النظيف والمفصول أسطرياً
+                parsed_json = json.loads(raw_content)
+                final_mermaid = parsed_json.get("mermaid_code", "")
                 
-                # بث الكود النظيف دفعة واحدة أو بشكل متكامل ومستقر للخادم المساعد
-                await safely_enqueue_broadcast(final_mermaid)
-                yield f"data: {json.dumps({'content': final_mermaid})}\n\n"
+                if final_mermaid:
+                    # بث الكود النظيف والمستقر بالكامل للـ listener الفرعي دفعة واحدة
+                    await safely_enqueue_broadcast(final_mermaid)
+                    yield f"data: {json.dumps({'content': final_mermaid})}\n\n"
             
-            # إرسال إشارة اكتمال الإرسال للفرونت إند للبدء الفوري في عملية الرسم
+            # بث إشارة الانتهاء لإبلاغ الفرونت إند ببدء الرسم
             yield "data: [DONE]\n\n"
-            logger.info("POST /api/chat - Structured response transmission completed successfully.")
+            logger.info("POST /api/chat - JSON Structured response completed successfully.")
             
         except APIError as api_err:
             logger.error(f"OpenAI API Interface Failure: {str(api_err)}")
             yield f"data: {json.dumps({'error': f'OpenAI service error: {api_err.message}'})}\n\n"
+        except json.JSONDecodeError:
+            logger.error("Failed to parse JSON schema from model response.")
+            yield f"data: {json.dumps({'error': 'Model failed to output a strict valid JSON structure.'})}\n\n"
         except asyncio.TimeoutError:
             yield f"data: {json.dumps({'error': 'Upstream request sequence processing timed out.'})}\n\n"
         except asyncio.CancelledError:
