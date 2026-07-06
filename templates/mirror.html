@@ -168,21 +168,46 @@
 
             let currentMessageDiv = null;
             let accumulatedText = "";
+            let idleTimer = null;
+            const IDLE_MS = 2000; // لو مفيش بيانات جديدة لمدة ثانيتين، اعتبر البث خلص
+
+            async function finishCurrentMessage() {
+                if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+                if (currentMessageDiv) {
+                    await finalizeRender(currentMessageDiv);
+                }
+                currentMessageDiv = null;
+                accumulatedText = "";
+            }
+
+            function resetIdleTimer() {
+                if (idleTimer) clearTimeout(idleTimer);
+                idleTimer = setTimeout(() => {
+                    console.log("Idle timeout reached — finalizing mermaid render as fallback.");
+                    finishCurrentMessage();
+                }, IDLE_MS);
+            }
 
             eventSource.onmessage = async (event) => {
+                let raw = event.data;
+
+                // بعض السيرفرات ترسل [DONE] كنص خام مش JSON — نتعامل معه أولاً
+                if (raw.trim() === "[DONE]" || raw.includes('"[DONE]"')) {
+                    await finishCurrentMessage();
+                    return;
+                }
+
                 let data;
                 try {
-                    data = JSON.parse(event.data);
+                    data = JSON.parse(raw);
                 } catch (e) {
+                    // بدل التجاهل الصامت: نسجل البيانات الخام عشان نعرف شكلها الحقيقي
+                    console.warn("Could not parse SSE chunk as JSON, raw value:", raw);
                     return;
                 }
 
                 if (data.content === "[DONE]" || data.content === "[DONE]\n\n") {
-                    if (currentMessageDiv) {
-                        await finalizeRender(currentMessageDiv);
-                    }
-                    currentMessageDiv = null;
-                    accumulatedText = "";
+                    await finishCurrentMessage();
                     return;
                 }
 
@@ -198,10 +223,12 @@
                 accumulatedText += data.content;
                 renderStreamingContent(currentMessageDiv, accumulatedText);
                 chatContainer.scrollTop = chatContainer.scrollHeight;
+                resetIdleTimer();
             };
 
-            eventSource.onerror = () => {
-                console.log("Connection lost, reconnecting...");
+            eventSource.onerror = async () => {
+                console.log("Connection lost, finalizing pending message then reconnecting...");
+                await finishCurrentMessage();
                 eventSource.close();
                 setTimeout(initMirrorListener, 5000);
             };
