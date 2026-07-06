@@ -47,36 +47,44 @@
         const chatContainer = document.getElementById('chat-container');
         const source = new EventSource('/api/stream-mirror');
         let currentMessageDiv = null;
-        let isFirstToken = true; // مؤشر للرسالة الأولى
 
         source.onmessage = (event) => {
             const data = JSON.parse(event.data);
+            
+            // إذا وصل إشارة النهاية، نقوم بتهيئته للسؤال القادم
+            if (data.content === "[DONE]") {
+                currentMessageDiv = null;
+                return;
+            }
+
             if (!data.content) return;
 
-            // إذا كانت هذه بداية الرد، نظهر عبارة "تم استلام السؤال" مؤقتاً
-            if (isFirstToken) {
-                chatContainer.innerHTML = '<div class="status-msg">تم استلام السؤال، جارٍ المعالجة...</div>';
+            // إذا كانت بداية رد جديد (currentMessageDiv فارغ)
+            if (!currentMessageDiv) {
+                // إظهار رسالة "تم استلام السؤال"
+                const statusDiv = document.createElement('div');
+                statusDiv.className = 'status-msg';
+                statusDiv.innerText = 'تم استلام السؤال...';
+                chatContainer.appendChild(statusDiv);
+
+                // إنشاء فقاعة الرد
                 currentMessageDiv = document.createElement('div');
                 currentMessageDiv.className = 'message ai-message';
                 chatContainer.appendChild(currentMessageDiv);
-                isFirstToken = false;
+                
+                // إخفاء رسالة الاستلام بعد لحظات
+                setTimeout(() => statusDiv.style.display = 'none', 1000);
             }
 
-            // عند وصول الرد، نمسح عبارة "تم الاستلام" ونبدأ العرض
-            if (chatContainer.querySelector('.status-msg')) {
-                chatContainer.querySelector('.status-msg').style.display = 'none';
-            }
-
+            // إضافة النص وتحديث العرض
             currentMessageDiv.innerText += data.content;
             renderContent(currentMessageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         };
 
-        // عند انتهاء الرد، نعدل المؤشر لانتظار السؤال القادم
-        source.addEventListener('close', () => {
-            isFirstToken = true;
-            currentMessageDiv = null;
-        });
+        source.onerror = () => {
+            setTimeout(initMirrorListener, 3000);
+        };
     }
 
         // تشغيل البث عند تحميل الصفحة
