@@ -75,7 +75,10 @@ async def chat_endpoint(request: Request):
                         # 2. إرسال للتطبيق المكتبي
                         yield f"data: {json.dumps({'content': content})}\n\n"
                 
+                # إرسال إشارة الانتهاء للمرآة وللتطبيق المكتبي
+                await broadcast_queue.put("[DONE]")
                 yield "data: [DONE]\n\n"
+                
             except Exception as e:
                 logger.error(f"Streaming error: {str(e)}")
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
