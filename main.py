@@ -41,11 +41,11 @@ async def index(request: Request):
     return templates.TemplateResponse("mirror.html", {"request": request})
 
 @app.post("/api/update-config")
-async def update_config(request: Request):
-    # قراءة البيانات يدوياً من الطلب
-    data = await request.json()
-    SYSTEM_CONFIG.update(data)
-    return {"status": "success"}
+async def update_config(config: dict):
+    # لا حاجة لـ request.json هنا، الـ FastAPI سيقوم بتحويل الـ JSON إلى dict تلقائياً
+    SYSTEM_CONFIG.update(config)
+    logger.info(f"Configuration updated: {SYSTEM_CONFIG}")
+    return {"status": "success", "new_config": SYSTEM_CONFIG}
 
 @app.get("/api/stream-mirror")
 async def stream_mirror():
