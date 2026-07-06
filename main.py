@@ -8,10 +8,10 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from openai import AsyncOpenAI, APIError  # استخدام مكتبة OpenAI الرسمية بشكل مباشر
+from openai import AsyncOpenAI, APIError
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import uvicorn
-import re
 
 # -----------------------------------------------------------------------------
 # LOGGING CONFIGURATION
@@ -21,41 +21,41 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[logging.StreamHandler()]
 )
-logger = logging.getLogger("openai_mirror")
+logger = logging.getLogger("openai_structured_mirror")
 
 # -----------------------------------------------------------------------------
 # ENVIRONMENT & CONFIGURATION
 # -----------------------------------------------------------------------------
 load_dotenv()
 
-# جلب مفتاح الـ API الخاص بـ OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     logger.critical("Initialization failed: OPENAI_API_KEY environment variable is not set.")
     raise ValueError("OPENAI_API_KEY is not set.")
 
-# تعيين الموديل الافتراضي المستقر جداً في هيكلة النصوص وكتابة كود ميرميد نظيف
-MODEL_NAME = "gpt-4o-mini" 
+MODEL_NAME = "gpt-4o-mini"
 
-# الـ System Prompt المحسن والموجه بدقة لإنتاج أسطر برمجية منفصلة
+# الـ System Prompt الأساسي الموجه لهندسة الرسومات البيانية
 SYSTEM_CONFIG: Dict[str, str] = {
     "base_prompt": (
-        "You are a strict Mermaid diagram generator. Rules:\n"
-        "1. Output ONLY valid, compilable mermaid code blocks.\n"
-        "2. Start exactly with ```mermaid followed by a newline.\n"
-        "3. Write 'graph TD' or 'graph LR' on the next line.\n"
-        "4. Every single node connection (e.g., A --> B) MUST be written on a completely separate new line.\n"
-        "5. Do not include any conversational text or summary before or after the code block."
+        "You are an expert systems architect and strict Mermaid diagram generator.\n"
+        "Your sole task is to generate valid, compilable Mermaid syntax based on the user request.\n"
+        "Ensure every node connection and statement is separated on a proper new line."
     )
 }
+
+# تعريف قالب الـ JSON الصارم الذي يجبر الذكاء الاصطناعي على الالتزام بالبنية المطلوبة
+class DiagramResponse(BaseModel):
+    mermaid_code: str = Field(description="The complete, valid and beautifully indented Mermaid diagram code starting with graph TD or LR.")
+    explanation: str = Field(description="Brief textual overview or description of the diagram architecture.")
 
 # -----------------------------------------------------------------------------
 # INITIALIZATION
 # -----------------------------------------------------------------------------
 app = FastAPI(
-    title="OpenAI Mirror Professional",
-    version="1.0.0",
-    description="Production-ready FastAPI middleware linking architectures to OpenAI API via SSE."
+    title="OpenAI Structured Mirror Pro",
+    version="2.0.0",
+    description="FastAPI middleware serving rigid JSON structured outputs via OpenAI API."
 )
 
 app.add_middleware(
@@ -71,29 +71,7 @@ broadcast_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=10)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# تهيئة عميل OpenAI غير المتزامن (Async Client) رسمي ومباشر
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-# -----------------------------------------------------------------------------
-# UTILITY FUNCTIONS / HELPER LOGIC
-# -----------------------------------------------------------------------------
-def sanitize_mermaid_syntax(text: str) -> str:
-    """
-    دالة تنظيف ومعالجة كود Mermaid الملتصق وفصله بأسطر جديدة تلقائياً.
-    """
-    if not text:
-        return text
-    
-    text = re.sub(r'mermaidgraph\s*(TB|TD|LR|BT)', r'mermaid\ngraph \1', text)
-    text = text.replace("mermaidgraph", "mermaid\ngraph TD")
-    text = text.replace("```mermaidgraph", "```mermaid\ngraph TD")
-    
-    # تصحيح العلاقات الملتصقة
-    text = re.sub(r'(\])\s*([A-Za-z0-9_]+)(\[|\()', r'\1\n\2\3', text)
-    text = re.sub(r'(\S+-->\S+)\s+([A-Za-z0-9_]+-->)', r'\1\n\2', text)
-    text = re.sub(r'(\S+-\s*>\s*>\S+)\s+([A-Za-z0-9_]+-\s*>\s*>)', r'\1\n\2', text)
-    
-    return text
 
 async def safely_enqueue_broadcast(content: str) -> None:
     if broadcast_queue.full():
@@ -169,11 +147,10 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
     if not raw_messages or not isinstance(raw_messages, list):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Parameter field 'messages' must be a populated array.")
 
-    # تحسين الـ Context عبر إبقاء آخر 3 رسائل فقط
     optimized_history = raw_messages[-3:]
     
     logger.info("=" * 60)
-    logger.info(f"Pipeline Engine: OpenAI -> {MODEL_NAME}")
+    logger.info(f"Pipeline Engine: OpenAI (Structured Output Mode) -> {MODEL_NAME}")
     logger.info("=" * 60)
 
     compiled_messages = [{"role": "system", "content": SYSTEM_CONFIG["base_prompt"]}]
@@ -185,33 +162,29 @@ async def process_chat_stream(request: Request) -> StreamingResponse:
 
     async def chat_sse_stream_generator() -> AsyncGenerator[str, None]:
         try:
-            # استدعاء الـ API من OpenAI مع تشغيل ميزة البث (stream=True)
-            response_stream = await client.chat.completions.create(
+            # الاعتماد على معالج الاستجابة المهيكلة المتقدم لمنع مشاكل تقطيع وفقدان الأسطر
+            response = await client.beta.chat.completions.parse(
                 model=MODEL_NAME,
                 messages=compiled_messages,
-                stream=True,
-                temperature=0.1,  # درجة حرارة منخفضة لضمان التزام تام بالهيكلية البرمجية
-                max_tokens=1500
+                response_format=DiagramResponse,
+                temperature=0.1
             )
             
-            async for chunk in response_stream:
-                if not chunk.choices:
-                    continue
+            parsed_response = response.choices[0].message.parsed
+            if parsed_response:
+                # استخراج الكود البرمجي الصافي والمضمون هندسياً
+                final_mermaid = parsed_response.mermaid_code
                 
-                delta_content = chunk.choices[0].delta.content
-                if delta_content:
-                    # معالجة النصوص التالفة برمجياً لضمان سلامتها قبل بثها
-                    processed_token = sanitize_mermaid_syntax(delta_content)
-                    
-                    await safely_enqueue_broadcast(processed_token)
-                    yield f"data: {json.dumps({'content': processed_token})}\n\n"
+                # بث الكود النظيف دفعة واحدة أو بشكل متكامل ومستقر للخادم المساعد
+                await safely_enqueue_broadcast(final_mermaid)
+                yield f"data: {json.dumps({'content': final_mermaid})}\n\n"
             
-            # إرسال إشارة التوقف المعتمدة بالفرونت إند لإنهاء المعالجة ورسم المخطط
+            # إرسال إشارة اكتمال الإرسال للفرونت إند للبدء الفوري في عملية الرسم
             yield "data: [DONE]\n\n"
-            logger.info("POST /api/chat - OpenAI Stream transmission completed successfully.")
+            logger.info("POST /api/chat - Structured response transmission completed successfully.")
             
         except APIError as api_err:
-            logger.error(f"OpenAI API Connection Interface Failure: {str(api_err)}")
+            logger.error(f"OpenAI API Interface Failure: {str(api_err)}")
             yield f"data: {json.dumps({'error': f'OpenAI service error: {api_err.message}'})}\n\n"
         except asyncio.TimeoutError:
             yield f"data: {json.dumps({'error': 'Upstream request sequence processing timed out.'})}\n\n"
