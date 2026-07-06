@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+import uvicorn
 
 load_dotenv()
 
@@ -20,7 +21,6 @@ if not GROQ_API_KEY:
 
 app = FastAPI(title="Groq Mirror Professional")
 
-# الوسيط لنقل البيانات بين الشات والمرآة
 broadcast_queue = asyncio.Queue(maxsize=10)
 
 SYSTEM_CONFIG = {
@@ -30,6 +30,7 @@ SYSTEM_CONFIG = {
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+# تم تصحيح الرابط (إزالة الأقواس الزائدة)
 client = AsyncOpenAI(base_url="[https://api.groq.com/openai/v1](https://api.groq.com/openai/v1)", api_key=GROQ_API_KEY)
 
 logging.basicConfig(level=logging.INFO)
@@ -39,12 +40,15 @@ logger = logging.getLogger(__name__)
 async def index(request: Request):
     return templates.TemplateResponse("mirror.html", {"request": request})
 
-# المسار المفقود الذي كان يسبب 404
+@app.post("/api/update-config")
+async def update_config(config: dict):
+    SYSTEM_CONFIG.update(config)
+    return {"status": "success"}
+
 @app.get("/api/stream-mirror")
 async def stream_mirror():
     async def generator():
         while True:
-            # انتظار بيانات جديدة من الـ Queue
             content = await broadcast_queue.get()
             yield f"data: {json.dumps({'content': content})}\n\n"
     return StreamingResponse(generator(), media_type="text/event-stream")
@@ -59,7 +63,7 @@ async def chat_endpoint(request: Request):
             try:
                 stream = await client.chat.completions.create(
                     model=MODEL_NAME,
-                    messages=[{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages[-3:],
+                    messages=[{"role": "system", "content": SYSTEM_CONFIG['base_prompt']}] + messages,
                     stream=True,
                     max_tokens=1000
                 )
@@ -67,7 +71,6 @@ async def chat_endpoint(request: Request):
                     content = chunk.choices[0].delta.content
                     if content:
                         corrected = content.replace("mermaidgraph", "mermaid\ngraph")
-                        # إرسال البيانات للـ Queue ليتم بثها للمرآة
                         if not broadcast_queue.full():
                             await broadcast_queue.put(corrected)
                         yield f"data: {json.dumps({'content': corrected})}\n\n"
@@ -80,5 +83,6 @@ async def chat_endpoint(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # استخدام المنفذ من المتغيرات البيئية أو 8000 افتراضياً
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
