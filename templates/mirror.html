@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Groq Mirror Pro</title>
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="[https://cdn.jsdelivr.net/npm/marked/marked.min.js](https://cdn.jsdelivr.net/npm/marked/marked.min.js)"></script>
+    <script src="[https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js](https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js)"></script>
+    <script src="[https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js](https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js)"></script>
+    <link rel="stylesheet" href="[https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css](https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css)">
 </head>
 <body class="dark-theme">
 
@@ -31,6 +31,23 @@
     <script>
         let eventSource = null;
 
+        // تهيئة مكتبة Mermaid بشكل مسبق ومنعها من العمل التلقائي
+        mermaid.initialize({ 
+            startOnLoad: false,
+            theme: 'dark',
+            securityLevel: 'loose'
+        });
+
+        // تخصيص Marked لتحويل كتل كود mermaid إلى وسوم تحمل الكلاس الصحيح للرسم
+        const renderer = new marked.Renderer();
+        renderer.code = function({ text, lang }) {
+            if (lang === 'mermaid') {
+                return `<div class="mermaid">${text}</div>`;
+            }
+            return `<pre><code class="language-${lang || ''}">${text}</code></pre>`;
+        };
+        marked.setOptions({ renderer: renderer });
+
         async function saveConfig() {
             const prompt = document.getElementById('sys-prompt').value;
             const response = await fetch('/api/update-config', {
@@ -41,29 +58,55 @@
             if (response.ok) alert("تم تحديث الإعدادات!");
         }
 
-        function renderContent(element) {
-            element.innerHTML = marked.parse(element.innerText);
-            mermaid.init(undefined, element.querySelectorAll('.mermaid'));
-            element.querySelectorAll('pre code').forEach((block) => {
+        // دالة عرض وتحديث المحتوى أثناء البث (تتعامل مع النص فقط لمنع تلف عناصر الفرونت إند)
+        function renderStreamingContent(element, rawText) {
+            element.innerHTML = marked.parse(rawText);
+            element.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
                 hljs.highlightElement(block);
             });
         }
 
+        // دالة معالجة الرسم البياني النهائية بعد اكتمال وصول النص بالكامل
+        async function finalizeRender(element) {
+            try {
+                const textNodes = element.querySelectorAll('.mermaid');
+                if (textNodes.length > 0) {
+                    await mermaid.run({
+                        nodes: textNodes
+                    });
+                }
+            } catch (error) {
+                console.error("Mermaid parsing error:", error);
+            }
+        }
+
         function initMirrorListener() {
-            // ضمان إغلاق أي اتصال سابق لمنع استنزاف الموارد
             if (eventSource) {
                 eventSource.close();
             }
 
             const chatContainer = document.getElementById('chat-container');
             eventSource = new EventSource('/api/stream-mirror');
+            
             let currentMessageDiv = null;
+            let accumulatedText = ""; // لتخزين النص الخام القادم من الـ Stream بشكل آمن
 
-            eventSource.onmessage = (event) => {
-                const data = JSON.parse(event.data);
+            eventSource.onmessage = async (event) => {
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (e) {
+                    return;
+                }
                 
-                if (data.content === "[DONE]") {
+                // عند اكتمال استلام النص بالكامل [DONE]
+                if (data.content === "[DONE]" || data.content === "[DONE]\n\n") {
+                    if (currentMessageDiv) {
+                        // إطلاق أمر مكتبة ميرميد لتحويل الكود النصي إلى رسمة تفاعلية فوراً
+                        await finalizeRender(currentMessageDiv);
+                    }
                     currentMessageDiv = null;
+                    accumulatedText = "";
                     return;
                 }
 
@@ -73,21 +116,26 @@
                     currentMessageDiv = document.createElement('div');
                     currentMessageDiv.className = 'message ai-message';
                     chatContainer.appendChild(currentMessageDiv);
+                    accumulatedText = "";
                 }
 
-                currentMessageDiv.innerText += data.content;
-                renderContent(currentMessageDiv);
+                // تجميع النص الخام المحدث
+                accumulatedText += data.content;
+                
+                // عرض النص كـ Markdown أثناء تدفقه
+                renderStreamingContent(currentMessageDiv, accumulatedText);
+                
                 chatContainer.scrollTop = chatContainer.scrollHeight;
             };
 
             eventSource.onerror = () => {
                 console.log("Connection lost, reconnecting...");
-                eventSource.close(); // إغلاق الاتصال قبل إعادة المحاولة
+                eventSource.close();
                 setTimeout(initMirrorListener, 5000);
             };
         }
 
-        // بدء الاتصال عند تحميل الصفحة
+        // بدء تشغيل مستمع البث عند تحميل الصفحة
         initMirrorListener();
     </script>
 </body>
