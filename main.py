@@ -79,13 +79,22 @@ client = AsyncOpenAI(base_url=BASE_URL, api_key=GROQ_API_KEY)
 # -----------------------------------------------------------------------------
 def sanitize_mermaid_syntax(text: str) -> str:
     """
-    Corrects common LLM formatting abnormalities related to Mermaid blocks.
-    Fixes inline 'mermaidgraph' and code block fence attachments.
+    تنظيف وتصحيح الأخطاء الشائعة في كود ميرميد لضمان إمكانية رسمه مباشرة.
     """
     if not text:
         return text
+    
+    # تصحيح الالتصاق بجميع أشكاله (TB أو TD أو LR)
+    text = text.replace("mermaidgraph TB", "mermaid\ngraph TB")
+    text = text.replace("mermaidgraph TD", "mermaid\ngraph TD")
+    text = text.replace("mermaidgraph LR", "mermaid\ngraph LR")
     text = text.replace("mermaidgraph", "mermaid\ngraph")
+    
+    text = text.replace("```mermaidgraph TB", "```mermaid\ngraph TB")
+    text = text.replace("```mermaidgraph TD", "```mermaid\ngraph TD")
+    text = text.replace("```mermaidgraph LR", "```mermaid\ngraph LR")
     text = text.replace("```mermaidgraph", "```mermaid\ngraph")
+    
     return text
 
 async def safely_enqueue_broadcast(content: str) -> None:
