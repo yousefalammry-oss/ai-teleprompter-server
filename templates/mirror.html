@@ -67,10 +67,30 @@
             });
         }
 
-        // دالة معالجة الرسم البياني النهائية بعد اكتمال وصول النص بالكامل
+       // دالة معالجة وتصحيح الرسم البياني النهائية بعد اكتمال وصول النص بالكامل
         async function finalizeRender(element) {
             try {
                 const textNodes = element.querySelectorAll('.mermaid');
+                textNodes.forEach(node => {
+                    let code = node.innerText;
+                    
+                    // 1. إزالة الأوساخ والنصوص العادية التي تظهر بعد كود الميرميد
+                    // إذا كتب الذكاء الاصطناعي نصاً عادياً في نهاية الكود، نقوم بقصه
+                    if (code.includes("graph TD") || code.includes("graph LR") || code.includes("graph TB")) {
+                        // تنظيف الأسهم المشوهة ->> وتحويلها لأسهم ميرميد قياسية -->
+                        code = code.replace(/->>/g, " --> ");
+                        code = code.replace(/->/g, " --> ");
+                        
+                        // معالجة النصوص الملتصقة بأسطر جديدة
+                        code = code.split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
+                        
+                        // إزالة الكلمات المتكررة التالفة في الأسطر الأخيرة (مثل Error Error Error)
+                        code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
+                    }
+                    
+                    node.innerText = code;
+                });
+
                 if (textNodes.length > 0) {
                     await mermaid.run({
                         nodes: textNodes
@@ -78,6 +98,11 @@
                 }
             } catch (error) {
                 console.error("Mermaid parsing error:", error);
+                // في حال فشل الرسم التلقائي بسبب تلف شديد، يتم إظهار تنبيه أو محاولة إصلاح مبسطة
+                element.querySelectorAll('.mermaid').forEach(node => {
+                    node.style.borderLeft = "3px solid #ff4444";
+                    node.style.paddingLeft = "10px";
+                });
             }
         }
 
