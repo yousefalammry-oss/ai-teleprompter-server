@@ -5,11 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Groq Mirror Pro</title>
     <link rel="stylesheet" href="/static/style.css">
-    
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <style>
+        /* حاوية مؤقتة أثناء البث تعرض النص الخام بشكل مقروء قبل تحويله لرسم */
+        .mermaid-streaming {
+            white-space: pre-wrap;
+            font-family: monospace;
+            color: #888;
+            background: #111;
+            padding: 10px;
+            border-radius: 6px;
+        }
+    </style>
 </head>
 <body class="dark-theme">
 
@@ -32,25 +43,32 @@
     <script>
         let eventSource = null;
 
-        // تهيئة مكتبة Mermaid بشكل مسبق ومنعها من العمل التلقائي حتى يكتمل النص
-        mermaid.initialize({ 
+        mermaid.initialize({
             startOnLoad: false,
             theme: 'dark',
             securityLevel: 'loose'
         });
 
-        // تخصيص Marked المحدث ليتوافق مع كافة إصدارات المكتبة
         const renderer = new marked.Renderer();
         renderer.code = function(codeObj) {
             const text = codeObj.text || codeObj;
             const lang = codeObj.lang || '';
-            
-            if (lang === 'mermaid' || text.includes('graph TD') || text.includes('graph LR') || text.includes('graph TB')) {
+
+            if (lang === 'mermaid' || looksLikeMermaid(text)) {
                 return `<div class="mermaid">${text}</div>`;
             }
             return `<pre><code class="language-${lang}">${text}</code></pre>`;
         };
         marked.setOptions({ renderer: renderer });
+
+        // === الإصلاح الأساسي ===
+        // النصوص القادمة من الموديل غالباً بلا ```mermaid على الإطلاق،
+        // لذا نكتشفها مباشرة بدل الاعتماد على marked لتمييزها كـ code block
+        function looksLikeMermaid(text) {
+            return /graph\s+(TD|LR|TB|BT|RL)/i.test(text)
+                || /-->/.test(text)
+                || /^\s*mermaidgraph/i.test(text);
+        }
 
         async function saveConfig() {
             const prompt = document.getElementById('sys-prompt').value;
@@ -62,72 +80,75 @@
             if (response.ok) alert("تم تحديث الإعدادات!");
         }
 
-        // دالة عرض وتحديث المحتوى النصي أثناء البث
+        // أثناء البث: لو النص يبدو كمخطط ميرميد، نعرضه كنص خام (بدون محاولة رسمه وهو غير مكتمل)
+        // لأن رسم مخطط ناقص بشكل متكرر يسبب أخطاء ووميض في الواجهة
         function renderStreamingContent(element, rawText) {
-            // محاولة أولية لتنظيف الأسطر الملتصقة حتى أثناء الستريم ليراها المستخدم منسقة
-            let cleanStreaming = rawText
-                .replace(/mermaidgraph/gi, "graph TD\n")
-                .replace(/(graph\s+(?:TD|LR|TB|BT))/gi, "$1\n");
-                
-            element.innerHTML = marked.parse(cleanStreaming);
+            if (looksLikeMermaid(rawText)) {
+                element.classList.add('mermaid-streaming');
+                element.classList.remove('mermaid');
+                element.innerText = rawText;
+                return;
+            }
+
+            element.classList.remove('mermaid-streaming');
+            element.innerHTML = marked.parse(rawText);
             element.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
                 hljs.highlightElement(block);
             });
         }
 
-        // دالة معالجة وتصحيح الرسم البياني النهائية الصارمة
+        // عند اكتمال الرسالة: تنظيف الكود المشوه ثم رسمه فعلياً عبر mermaid.run
         async function finalizeRender(element) {
             try {
-                // تحويل أي نص يحتوي على هيكلية ميرميد مدمجة إلى وسم كلاس mermaid لو سقط من دالة الـ parse
-                if (!element.querySelector('.mermaid') && (element.innerText.includes('graph TD') || element.innerText.includes('graph LR'))) {
-                    element.innerHTML = `<div class="mermaid">${element.innerText}</div>`;
-                }
+                const raw = element.innerText;
 
-                const textNodes = element.querySelectorAll('.mermaid');
-                textNodes.forEach(node => {
-                    let code = node.innerText;
-                    
-                    // تنظيف التسمية الملتصقة بالسيرفر
-                    code = code.replace(/mermaidgraph/gi, "graph TD");
-                    
-                    // تصحيح الأسهم التالفة أو المشوهة التي يرسلها الموديل أحياناً
-                    code = code.replace(/->>/g, " --> ");
-                    code = code.replace(/->/g, " --> ");
-                    code = code.replace(/--\s*>/g, " --> ");
-
-                    // الكود السحري: فصل العلاقات المشوهة والمدمجة في سطر واحد بأسطر عمودية جديدة
-                    // يبحث عن انتهاء تعريف العقدة ] أو ) أو وسم الـ subgraph ويضع سطر جديد فوراً إذا تبعها كود آخر
-                    code = code.replace(/(\s*subgraph\s+[A-Za-z0-9_]+)/gi, "\n$1\n");
-                    code = code.replace(/(\])\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
-                    code = code.replace(/(\))\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
-                    
-                    // البحث عن العلاقات الملتصقة (مثل: A-->B C-->D) وفصلها لأسطر جديدة
-                    code = code.replace(/(\S+\s*-->\s*[^\]\[\)\(]+?(?:\]|\)|[\s\w]+))\s+([A-Za-z0-9_]+\s*-->)/gi, "$1\n$2");
-                    
-                    // تنظيف أي تكرار ناتج عن الـ Error الخارجي المقصوص
-                    code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
-                    code = code.replace(/end\s+end/gi, "end");
-
-                    // إعادة البناء والترتيب النهائي للأسطر
-                    code = code.split('\n')
-                               .map(line => line.trim())
-                               .filter(line => line.length > 0)
-                               .join('\n');
-                    
-                    node.innerText = code;
-                });
-
-                if (textNodes.length > 0) {
-                    await mermaid.run({
-                        nodes: textNodes
+                if (!looksLikeMermaid(raw)) {
+                    // محتوى نصي عادي، عرضه بشكل طبيعي عبر marked
+                    element.classList.remove('mermaid-streaming');
+                    element.innerHTML = marked.parse(raw);
+                    element.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+                        hljs.highlightElement(block);
                     });
+                    return;
                 }
+
+                let code = raw;
+
+                // تنظيف التسمية الملتصقة بالسيرفر
+                code = code.replace(/mermaidgraph/gi, "graph TD");
+
+                // تصحيح الأسهم التالفة أو المشوهة
+                code = code.replace(/->>/g, " --> ");
+                code = code.replace(/->/g, " --> ");
+                code = code.replace(/--\s*>/g, " --> ");
+
+                // فصل subgraph وعقد العلاقات المدمجة في سطر واحد بأسطر جديدة
+                code = code.replace(/(\s*subgraph\s+[A-Za-z0-9_]+)/gi, "\n$1\n");
+                code = code.replace(/(\])\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
+                code = code.replace(/(\))\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
+                code = code.replace(/(\S+\s*-->\s*[^\]\[\)\(]+?(?:\]|\)|[\s\w]+))\s+([A-Za-z0-9_]+\s*-->)/gi, "$1\n$2");
+                code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
+                code = code.replace(/end\s+end/gi, "end");
+
+                // فصل كلمة "end" الخاصة بإغلاق subgraph عن العقدة التالية لها إن التصقت
+                code = code.replace(/\bend\b(?=\S)/gi, "end\n");
+
+                code = code.split('\n')
+                           .map(line => line.trim())
+                           .filter(line => line.length > 0)
+                           .join('\n');
+
+                element.classList.remove('mermaid-streaming');
+                element.classList.add('mermaid');
+                element.innerHTML = '';
+                element.innerText = code;
+
+                await mermaid.run({ nodes: [element] });
+
             } catch (error) {
                 console.error("Mermaid parsing error:", error);
-                element.querySelectorAll('.mermaid').forEach(node => {
-                    node.style.borderLeft = "3px solid #ff4444";
-                    node.style.paddingLeft = "10px";
-                });
+                element.style.borderLeft = "3px solid #ff4444";
+                element.style.paddingLeft = "10px";
             }
         }
 
@@ -138,9 +159,9 @@
 
             const chatContainer = document.getElementById('chat-container');
             eventSource = new EventSource('/api/stream-mirror');
-            
+
             let currentMessageDiv = null;
-            let accumulatedText = ""; 
+            let accumulatedText = "";
 
             eventSource.onmessage = async (event) => {
                 let data;
@@ -149,7 +170,7 @@
                 } catch (e) {
                     return;
                 }
-                
+
                 if (data.content === "[DONE]" || data.content === "[DONE]\n\n") {
                     if (currentMessageDiv) {
                         await finalizeRender(currentMessageDiv);
