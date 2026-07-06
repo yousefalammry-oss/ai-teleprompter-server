@@ -97,13 +97,93 @@
             });
         }
 
-        // عند اكتمال الرسالة: تنظيف الكود المشوه ثم رسمه فعلياً عبر mermaid.run
+        // === تنظيف أساسي: إصلاح الأسوار والأسهم والتصاق الأسطر (كما كان) ===
+        function sanitizeMermaidCode(raw) {
+            let code = raw;
+
+            code = code.replace(/```mermaid/gi, "");
+            code = code.replace(/```/g, "");
+            code = code.replace(/mermaidgraph/gi, "graph TD");
+
+            code = code.replace(/->>/g, " --> ");
+            code = code.replace(/->/g, " --> ");
+            code = code.replace(/--\s*>/g, " --> ");
+
+            code = code.replace(/(\s*subgraph\s+[A-Za-z0-9_]+)/gi, "\n$1\n");
+            code = code.replace(/(\])\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
+            code = code.replace(/(\))\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
+            code = code.replace(/(\S+\s*-->\s*[^\]\[\)\(]+?(?:\]|\)|[\s\w]+))\s+([A-Za-z0-9_]+\s*-->)/gi, "$1\n$2");
+            code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
+            code = code.replace(/end\s+end/gi, "end");
+
+            code = code.replace(/(-->\s*(?:\|[^|]*\|)?\s*)end\b/gi, "$1EndNode");
+            code = code.replace(/\bend\b(?=\S)/gi, "end\n");
+
+            const seenNodeIds = new Set();
+            code = code.replace(/([A-Za-z0-9_]+)(\[[^\]]*\]|\([^\)]*\))/g, (match, id, label) => {
+                if (seenNodeIds.has(id)) return id;
+                seenNodeIds.add(id);
+                return match;
+            });
+
+            return code.split('\n')
+                        .map(line => line.trim())
+                        .filter(line => line.length > 0)
+                        .join('\n');
+        }
+
+        // === التحقق الفعلي من صحة الكود عبر محلل mermaid نفسه، بدل تخمين الأخطاء ===
+        async function isMermaidValid(code) {
+            try {
+                await mermaid.parse(code);
+                return true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // === الحل النهائي: بدل ترقيع نص تالف، نستخرج العُقد والعلاقات الفعلية
+        // ونعيد بناء مخطط جديد من الصفر بصيغة مضمونة الصحة ===
+        function rebuildGraphFromScratch(raw) {
+            const nodeDefs = new Map();
+            const nodeDefRegex = /([A-Za-z0-9_]+)\s*(\[[^\]\n]*\]|\(\([^\)\n]*\)\)|\([^\)\n]*\))/g;
+            let m;
+            while ((m = nodeDefRegex.exec(raw)) !== null) {
+                const id = m[1];
+                if (/^(end|graph|subgraph)$/i.test(id)) continue;
+                if (!nodeDefs.has(id)) nodeDefs.set(id, m[2]);
+            }
+
+            const edges = [];
+            const seenEdges = new Set();
+            const edgeRegex = /([A-Za-z0-9_]+)\s*-->\s*(?:\|([^|]*)\|\s*)?([A-Za-z0-9_]+)/g;
+            while ((m = edgeRegex.exec(raw)) !== null) {
+                const [, from, label, to] = m;
+                if (/^end$/i.test(from) || /^end$/i.test(to)) continue;
+                const key = from + '|' + (label || '') + '|' + to;
+                if (seenEdges.has(key)) continue;
+                seenEdges.add(key);
+                edges.push({ from, label, to });
+            }
+
+            if (edges.length === 0) return null;
+
+            let out = "graph TD\n";
+            nodeDefs.forEach((label, id) => { out += `    ${id}${label}\n`; });
+            edges.forEach(({ from, label, to }) => {
+                out += label
+                    ? `    ${from} -->|${label.trim()}| ${to}\n`
+                    : `    ${from} --> ${to}\n`;
+            });
+            return out;
+        }
+
+        // عند اكتمال الرسالة: تنظيف → تحقق → إعادة بناء عند الفشل → رسالة واضحة كملاذ أخير
         async function finalizeRender(element) {
             try {
                 const raw = element.innerText;
 
                 if (!looksLikeMermaid(raw)) {
-                    // محتوى نصي عادي، عرضه بشكل طبيعي عبر marked
                     element.classList.remove('mermaid-streaming');
                     element.innerHTML = marked.parse(raw);
                     element.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
@@ -112,55 +192,31 @@
                     return;
                 }
 
-                let code = raw;
+                let code = sanitizeMermaidCode(raw);
+                let valid = await isMermaidValid(code);
 
-                // === إزالة أسوار الكود (```mermaid ... ```) إن وجدت ===
-                // هذا كان سبب المشكلة الظاهرة في الصورة: النص يصل ومعه العلامات
-                // فيفشل mermaid في تفسيره ويظل معروضاً كنص خام
-                code = code.replace(/```mermaid/gi, "");
-                code = code.replace(/```/g, "");
-
-                // تنظيف التسمية الملتصقة بالسيرفر
-                code = code.replace(/mermaidgraph/gi, "graph TD");
-
-                // تصحيح الأسهم التالفة أو المشوهة
-                code = code.replace(/->>/g, " --> ");
-                code = code.replace(/->/g, " --> ");
-                code = code.replace(/--\s*>/g, " --> ");
-
-                // فصل subgraph وعقد العلاقات المدمجة في سطر واحد بأسطر جديدة
-                code = code.replace(/(\s*subgraph\s+[A-Za-z0-9_]+)/gi, "\n$1\n");
-                code = code.replace(/(\])\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
-                code = code.replace(/(\))\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
-                code = code.replace(/(\S+\s*-->\s*[^\]\[\)\(]+?(?:\]|\)|[\s\w]+))\s+([A-Za-z0-9_]+\s*-->)/gi, "$1\n$2");
-                code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
-                code = code.replace(/end\s+end/gi, "end");
-
-                // === إصلاح استخدام "end" كاسم عقدة بدل خاتمة subgraph ===
-                // لو "end" جاءت بعد سهم (مباشرة أو بعد |label|) فهي هدف وليست خاتمة، فنعيد تسميتها
-                code = code.replace(/(-->\s*(?:\|[^|]*\|)?\s*)end\b/gi, "$1EndNode");
-
-                // فصل كلمة "end" الخاصة بإغلاق subgraph عن العقدة التالية لها إن التصقت
-                code = code.replace(/\bend\b(?=\S)/gi, "end\n");
-
-                // === إصلاح إعادة تعريف نفس العقدة بلاصقتين مختلفتين ===
-                // mermaid لا يقبل تعريف نفس المعرف أكثر من مرة بمحتوى مختلف
-                // نُبقي أول تعريف فقط ونحذف اللاصقة من أي تكرار لاحق لنفس المعرف
-                {
-                    const seenNodeIds = new Set();
-                    code = code.replace(/([A-Za-z0-9_]+)(\[[^\]]*\]|\([^\)]*\))/g, (match, id, label) => {
-                        if (seenNodeIds.has(id)) {
-                            return id; // إبقاء المعرف فقط، حذف إعادة التعريف
-                        }
-                        seenNodeIds.add(id);
-                        return match;
-                    });
+                if (!valid) {
+                    console.warn("فشل التحقق بعد التنظيف الأساسي، جارٍ إعادة البناء من الصفر...");
+                    const rebuilt = rebuildGraphFromScratch(raw);
+                    if (rebuilt && await isMermaidValid(rebuilt)) {
+                        code = rebuilt;
+                        valid = true;
+                    }
                 }
 
-                code = code.split('\n')
-                           .map(line => line.trim())
-                           .filter(line => line.length > 0)
-                           .join('\n');
+                if (!valid) {
+                    element.classList.remove('mermaid-streaming', 'mermaid');
+                    const escaped = raw.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    element.innerHTML = `
+                        <div style="border-left:3px solid #ff4444; padding:10px; color:#ccc;">
+                            <strong>تعذر رسم المخطط</strong> — محتوى المخطط الوارد من الموديل غير صالح البنية حتى بعد الإصلاح التلقائي وإعادة البناء.
+                            <details style="margin-top:8px;">
+                                <summary style="cursor:pointer;">عرض الكود الخام للمراجعة</summary>
+                                <pre style="white-space:pre-wrap; font-size:12px;">${escaped}</pre>
+                            </details>
+                        </div>`;
+                    return;
+                }
 
                 element.classList.remove('mermaid-streaming');
                 element.classList.add('mermaid');
@@ -175,6 +231,7 @@
                 element.style.paddingLeft = "10px";
             }
         }
+
 
         function initMirrorListener() {
             if (eventSource) {
