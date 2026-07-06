@@ -43,35 +43,41 @@
         }
 
         // مستمع البث المباشر (SSE)
-        function initMirrorListener() {
-            const chatContainer = document.getElementById('chat-container');
-            const source = new EventSource('/api/stream-mirror');
-            let currentMessageDiv = null;
+       function initMirrorListener() {
+        const chatContainer = document.getElementById('chat-container');
+        const source = new EventSource('/api/stream-mirror');
+        let currentMessageDiv = null;
+        let isFirstToken = true; // مؤشر للرسالة الأولى
 
-            source.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (!data.content) return;
+        source.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (!data.content) return;
 
-                // إنشاء فقاعة رسالة جديدة إذا لم توجد
-                if (!currentMessageDiv) {
-                    currentMessageDiv = document.createElement('div');
-                    currentMessageDiv.className = 'message ai-message';
-                    chatContainer.appendChild(currentMessageDiv);
-                }
+            // إذا كانت هذه بداية الرد، نظهر عبارة "تم استلام السؤال" مؤقتاً
+            if (isFirstToken) {
+                chatContainer.innerHTML = '<div class="status-msg">تم استلام السؤال، جارٍ المعالجة...</div>';
+                currentMessageDiv = document.createElement('div');
+                currentMessageDiv.className = 'message ai-message';
+                chatContainer.appendChild(currentMessageDiv);
+                isFirstToken = false;
+            }
 
-                // إضافة النص الجديد
-                currentMessageDiv.innerText += data.content;
-                
-                // تحديث العرض لحظياً
-                renderContent(currentMessageDiv);
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-            };
+            // عند وصول الرد، نمسح عبارة "تم الاستلام" ونبدأ العرض
+            if (chatContainer.querySelector('.status-msg')) {
+                chatContainer.querySelector('.status-msg').style.display = 'none';
+            }
 
-            source.onerror = () => {
-                console.log("إعادة الاتصال بالبث...");
-                setTimeout(initMirrorListener, 3000);
-            };
-        }
+            currentMessageDiv.innerText += data.content;
+            renderContent(currentMessageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        };
+
+        // عند انتهاء الرد، نعدل المؤشر لانتظار السؤال القادم
+        source.addEventListener('close', () => {
+            isFirstToken = true;
+            currentMessageDiv = null;
+        });
+    }
 
         // تشغيل البث عند تحميل الصفحة
         initMirrorListener();
