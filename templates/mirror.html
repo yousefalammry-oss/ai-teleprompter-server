@@ -15,7 +15,7 @@
 
     <section id="config-panel" style="background: #1a1a1a; padding: 20px; border-bottom: 2px solid #333;">
         <h3 style="margin-top: 0; color: #aaa;">إعدادات الذكاء الاصطناعي</h3>
-        <textarea id="sys-prompt" style="width: 100%; height: 80px; background: #000; color: #fff; border: 1px solid #555; padding: 10px; border-radius: 5px;">أنت خبير في إنشاء الرسوم البيانية. استخدم كود Mermaid حصراً داخل ```mermaid [الكود] ```. ممنوع استخدام رسومات ASCII نهائياً.</textarea>
+        <textarea id="sys-prompt" style="width: 100%; height: 80px; background: #000; color: #fff; border: 1px solid #555; padding: 10px; border-radius: 5px;">You are a strict Mermaid diagram generator. Output ONLY valid mermaid code blocks. Every node connection (e.g., A --> B) MUST be written on a completely new line. Do NOT combine multiple connections into a single line. Do NOT write any conversational text or summary before or after the code block. Start with ```mermaid and end with ```.</textarea>
         <button onclick="saveConfig()" style="margin-top: 10px; padding: 8px 20px; cursor: pointer;">حفظ الإعدادات</button>
     </section>
 
@@ -39,13 +39,13 @@
             securityLevel: 'loose'
         });
 
-        // تخصيص Marked المحدث ليتوافق مع كافة إصدارات المكتبة القديمة والحديثة بشكل مستقر
+        // تخصيص Marked المحدث ليتوافق مع كافة إصدارات المكتبة
         const renderer = new marked.Renderer();
         renderer.code = function(codeObj) {
             const text = codeObj.text || codeObj;
             const lang = codeObj.lang || '';
             
-            if (lang === 'mermaid') {
+            if (lang === 'mermaid' || text.includes('graph TD') || text.includes('graph LR') || text.includes('graph TB')) {
                 return `<div class="mermaid">${text}</div>`;
             }
             return `<pre><code class="language-${lang}">${text}</code></pre>`;
@@ -64,31 +64,55 @@
 
         // دالة عرض وتحديث المحتوى النصي أثناء البث
         function renderStreamingContent(element, rawText) {
-            element.innerHTML = marked.parse(rawText);
+            // محاولة أولية لتنظيف الأسطر الملتصقة حتى أثناء الستريم ليراها المستخدم منسقة
+            let cleanStreaming = rawText
+                .replace(/mermaidgraph/gi, "graph TD\n")
+                .replace(/(graph\s+(?:TD|LR|TB|BT))/gi, "$1\n");
+                
+            element.innerHTML = marked.parse(cleanStreaming);
             element.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
                 hljs.highlightElement(block);
             });
         }
 
-        // دالة معالجة وتصحيح الرسم البياني النهائية بعد اكتمال وصول النص بالكامل
+        // دالة معالجة وتصحيح الرسم البياني النهائية الصارمة
         async function finalizeRender(element) {
             try {
+                // تحويل أي نص يحتوي على هيكلية ميرميد مدمجة إلى وسم كلاس mermaid لو سقط من دالة الـ parse
+                if (!element.querySelector('.mermaid') && (element.innerText.includes('graph TD') || element.innerText.includes('graph LR'))) {
+                    element.innerHTML = `<div class="mermaid">${element.innerText}</div>`;
+                }
+
                 const textNodes = element.querySelectorAll('.mermaid');
                 textNodes.forEach(node => {
                     let code = node.innerText;
                     
-                    // 1. إزالة الأوساخ والنصوص العادية التي تظهر بعد كود الميرميد
-                    if (code.includes("graph TD") || code.includes("graph LR") || code.includes("graph TB")) {
-                        // تنظيف الأسهم المشوهة ->> وتحويلها لأسهم ميرميد قياسية -->
-                        code = code.replace(/->>/g, " --> ");
-                        code = code.replace(/->/g, " --> ");
-                        
-                        // معالجة النصوص الملتصقة بأسطر جديدة
-                        code = code.split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
-                        
-                        // إزالة الكلمات المتكررة التالفة في الأسطر الأخيرة (مثل Error Error Error)
-                        code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
-                    }
+                    // تنظيف التسمية الملتصقة بالسيرفر
+                    code = code.replace(/mermaidgraph/gi, "graph TD");
+                    
+                    // تصحيح الأسهم التالفة أو المشوهة التي يرسلها الموديل أحياناً
+                    code = code.replace(/->>/g, " --> ");
+                    code = code.replace(/->/g, " --> ");
+                    code = code.replace(/--\s*>/g, " --> ");
+
+                    // الكود السحري: فصل العلاقات المشوهة والمدمجة في سطر واحد بأسطر عمودية جديدة
+                    // يبحث عن انتهاء تعريف العقدة ] أو ) أو وسم الـ subgraph ويضع سطر جديد فوراً إذا تبعها كود آخر
+                    code = code.replace(/(\s*subgraph\s+[A-Za-z0-9_]+)/gi, "\n$1\n");
+                    code = code.replace(/(\])\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
+                    code = code.replace(/(\))\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
+                    
+                    // البحث عن العلاقات الملتصقة (مثل: A-->B C-->D) وفصلها لأسطر جديدة
+                    code = code.replace(/(\S+\s*-->\s*[^\]\[\)\(]+?(?:\]|\)|[\s\w]+))\s+([A-Za-z0-9_]+\s*-->)/gi, "$1\n$2");
+                    
+                    // تنظيف أي تكرار ناتج عن الـ Error الخارجي المقصوص
+                    code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
+                    code = code.replace(/end\s+end/gi, "end");
+
+                    // إعادة البناء والترتيب النهائي للأسطر
+                    code = code.split('\n')
+                               .map(line => line.trim())
+                               .filter(line => line.length > 0)
+                               .join('\n');
                     
                     node.innerText = code;
                 });
@@ -100,7 +124,6 @@
                 }
             } catch (error) {
                 console.error("Mermaid parsing error:", error);
-                // في حال فشل الرسم التلقائي بسبب تلف شديد، يتم إظهار تنبيه مرئي جانبي لسهولة التتبع
                 element.querySelectorAll('.mermaid').forEach(node => {
                     node.style.borderLeft = "3px solid #ff4444";
                     node.style.paddingLeft = "10px";
@@ -157,7 +180,6 @@
             };
         }
 
-        // بدء تشغيل مستمع البث عند تحميل الصفحة
         initMirrorListener();
     </script>
 </body>
