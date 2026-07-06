@@ -32,7 +32,7 @@ if not GROQ_API_KEY:
     logger.critical("Initialization failed: GROQ_API_KEY environment variable is not set.")
     raise ValueError("GROQ_API_KEY is not set.")
 
-MODEL_NAME = "llama-3.3-8b-instant"
+MODEL_NAME = "llama-3.1-8b-instant"
 BASE_URL = "https://api.groq.com/openai/v1"
 
 # In-memory shared configuration
