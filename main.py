@@ -14,7 +14,8 @@ load_dotenv()
 
 # Configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-MODEL_NAME = "openai/gpt-oss-120b"
+#MODEL_NAME = "openai/gpt-oss-120b"
+MODEL_NAME = "llama-3.1-70b-versatile"
 
 
 if not GROQ_API_KEY:
