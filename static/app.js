@@ -1,88 +1,85 @@
 /**
- * Groq Mirror Professional - Core Frontend Engine
- * 
- * Features:
- * - Persistent Line Buffer (Handles fragmented TCP packets)
- * - Throttled Render Scheduler (requestAnimationFrame at 60fps)
- * - Atomic Mermaid Rendering (Prevents re-render flicker)
- * - Incremental Markdown (Auto-closes open tags during streaming)
+ * Groq Mirror Professional - Core Streaming Engine
+ * Designed for high performance, incremental rendering, and stable Mermaid integration.
  */
+
+class RenderScheduler {
+    constructor() {
+        this.queue = [];
+        this.isProcessing = false;
+    }
+
+    enqueue(task) {
+        this.queue.push(task);
+        if (!this.isProcessing) {
+            this.process();
+        }
+    }
+
+    process() {
+        if (this.queue.length === 0) {
+            this.isProcessing = false;
+            return;
+        }
+
+        this.isProcessing = true;
+        requestAnimationFrame(() => {
+            const task = this.queue.shift();
+            task();
+            this.process();
+        });
+    }
+}
 
 class MermaidManager {
     constructor() {
-        this.renderCache = new Map(); // Cache to prevent redundant renders
+        this.cache = new Map();
         this.counter = 0;
-        
-        // Initialize Mermaid with dark theme
         mermaid.initialize({
             startOnLoad: false,
             theme: 'dark',
             securityLevel: 'loose',
-            fontFamily: 'monospace'
         });
     }
 
-    /**
-     * Renders a Mermaid diagram only if the code has changed.
-     */
     async renderDiagram(containerId, code) {
-        // Skip if this specific container already rendered this exact code
-        if (this.renderCache.get(containerId) === code) return;
+        if (this.cache.get(containerId) === code) return;
 
         const container = document.getElementById(containerId);
         if (!container) return;
 
         try {
-            const uniqueId = `mermaid-svg-${Date.now()}-${this.counter++}`;
-            // Use mermaid.render (Async API) instead of init()
-            const { svg } = await mermaid.render(uniqueId, code);
-            
+            const id = `mermaid-${Date.now()}-${this.counter++}`;
+            const { svg } = await mermaid.render(id, code);
             container.innerHTML = svg;
-            this.renderCache.set(containerId, code);
-            
-            // Fix SVG sizing
-            const svgElement = container.querySelector('svg');
-            if (svgElement) {
-                svgElement.style.maxWidth = '100%';
-                svgElement.style.height = 'auto';
-            }
+            this.cache.set(containerId, code);
         } catch (err) {
-            console.error("Mermaid Syntax Error:", err);
-            // Don't show error immediately during streaming as code might be partial
+            console.error("Mermaid Render Error:", err);
+            container.innerHTML = `<div class="error">Invalid Mermaid Syntax</div>`;
         }
     }
 }
 
 class StreamingEngine {
     constructor() {
-        // DOM Elements
         this.chatContainer = document.getElementById('chat-container');
         this.userInput = document.getElementById('user-input');
         this.sendBtn = document.getElementById('send-btn');
         this.stopBtn = document.getElementById('stop-btn');
         this.clearBtn = document.getElementById('clear-btn');
         
-        // Internal State
+        this.scheduler = new RenderScheduler();
         this.mermaidManager = new MermaidManager();
         this.abortController = null;
         this.messages = [];
         
-        // Rendering State (The Source of Truth)
-        this.streamingState = {
-            fullText: "",
-            isDirty: false,
-            container: null,
-            lastRenderedHtml: ""
-        };
-
-        this.initMarked();
+        this.setupMarked();
         this.initEventListeners();
-        this.startAnimationLoop();
     }
 
-    initMarked() {
+    setupMarked() {
         marked.setOptions({
-            highlight: (code, lang) => {
+            highlight: function(code, lang) {
                 if (lang && hljs.getLanguage(lang)) {
                     return hljs.highlight(code, { language: lang }).value;
                 }
@@ -97,34 +94,12 @@ class StreamingEngine {
         this.sendBtn.addEventListener('click', () => this.handleSend());
         this.stopBtn.addEventListener('click', () => this.handleStop());
         this.clearBtn.addEventListener('click', () => this.clearChat());
-        
         this.userInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 this.handleSend();
             }
         });
-
-        // Auto-resize textarea
-        this.userInput.addEventListener('input', () => {
-            this.userInput.style.height = 'auto';
-            this.userInput.style.height = (this.userInput.scrollHeight) + 'px';
-        });
-    }
-
-    /**
-     * High-performance Loop
-     * Synchronizes DOM updates with the browser's refresh rate.
-     */
-    startAnimationLoop() {
-        const frame = () => {
-            if (this.streamingState.isDirty && this.streamingState.container) {
-                this.renderIncremental();
-                this.streamingState.isDirty = false;
-            }
-            requestAnimationFrame(frame);
-        };
-        requestAnimationFrame(frame);
     }
 
     async handleSend() {
@@ -132,31 +107,53 @@ class StreamingEngine {
         if (!text) return;
 
         this.userInput.value = '';
-        this.userInput.style.height = 'auto';
-        
-        // Add User Message
         this.addMessage(text, 'user');
+        
         this.messages.push({ role: 'user', content: text });
-
         await this.startStreaming();
     }
 
+    handleStop() {
+        if (this.abortController) {
+            this.abortController.abort();
+            this.finalizeStream();
+        }
+    }
+
+    clearChat() {
+        this.chatContainer.innerHTML = '';
+        this.messages = [];
+    }
+
+    addMessage(text, role) {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `message ${role}-message markdown-body`;
+        
+        // Use DocumentFragment for performance
+        const fragment = document.createDocumentFragment();
+        fragment.appendChild(msgDiv);
+        this.chatContainer.appendChild(fragment);
+        
+        if (role === 'user') {
+            msgDiv.textContent = text;
+        }
+        
+        this.scrollToBottom();
+        return msgDiv;
+    }
+
     async startStreaming() {
-        this.toggleUIState(true);
+        this.toggleLoading(true);
         this.abortController = new AbortController();
         
         const botMsgDiv = this.addMessage('', 'bot');
-        const contentArea = document.createElement('div');
-        botMsgDiv.appendChild(contentArea);
+        const contentSpan = document.createElement('div');
+        botMsgDiv.appendChild(contentSpan);
 
-        // Reset state for new stream
-        this.streamingState.fullText = "";
-        this.streamingState.container = contentArea;
-        this.streamingState.lastRenderedHtml = "";
-        this.streamingState.isDirty = false;
-
-        let lineBuffer = ""; // Crucial: Accumulates partial JSON chunks
-
+        let fullText = "";
+let buffer = "";
+let responseBuffer = "";
+        
         try {
             const response = await fetch('/api/chat', {
                 method: 'POST',
@@ -169,138 +166,114 @@ class StreamingEngine {
             const decoder = new TextDecoder();
 
             while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
+    const { value, done } = await reader.read();
+    if (done) break;
 
-                lineBuffer += decoder.decode(value, { stream: true });
-                
-                // Process only complete lines
-                let lines = lineBuffer.split('\n');
-                lineBuffer = lines.pop(); // Keep partial line for next chunk
+    responseBuffer += decoder.decode(value, { stream: true });
+    
+    // Split by the SSE message separator
+    let parts = responseBuffer.split('\n\n');
+    
+    // Keep the last part in the buffer (it might be incomplete)
+    responseBuffer = parts.pop();
 
-                for (const line of lines) {
-                    const trimmedLine = line.trim();
-                    if (!trimmedLine || !trimmedLine.startsWith('data: ')) continue;
-                    
-                    const dataStr = trimmedLine.slice(6);
-                    if (dataStr === '[DONE]') continue;
-
-                    try {
-                        const data = JSON.parse(dataStr);
-                        if (data.content) {
-                            this.streamingState.fullText += data.content;
-                            this.streamingState.isDirty = true;
-                        }
-                    } catch (e) {
-                        // If JSON fails, it's a protocol fragmentation error
-                        // Prepend back to buffer
-                        lineBuffer = line + '\n' + lineBuffer;
+    for (const part of parts) {
+        const line = part.trim();
+        if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6);
+            if (dataStr === '[DONE]') continue;
+            try {
+                const data = JSON.parse(dataStr);
+                // Now safely update UI
+            } catch (e) {
+                console.error("Malformed frame:", line);
+            }
                     }
                 }
             }
         } catch (err) {
             if (err.name !== 'AbortError') {
-                contentArea.innerHTML += `<div class="error">Stream Error: ${err.message}</div>`;
+                contentSpan.innerHTML += `<p style="color: red">Error: ${err.message}</p>`;
             }
         } finally {
-            this.finalizeStream();
+            this.finalizeStream(fullText);
         }
     }
 
-    renderIncremental() {
-        let textToParse = this.streamingState.fullText;
-
-        // 1. Fix Markdown integrity (close open code blocks)
-        const codeBlockOccurrences = (textToParse.match(/```/g) || []).length;
-        if (codeBlockOccurrences % 2 !== 0) {
-            textToParse += '\n```';
+    renderIncremental(container, text) {
+        // Optimization: Pre-process text to handle unfinished code blocks
+        let processedText = text;
+        const openCodeBlocks = (text.match(/```/g) || []).length;
+        if (openCodeBlocks % 2 !== 0) {
+            processedText += '\n```'; // Temporarily close for rendering
         }
 
-        // 2. Generate HTML
-        const htmlOutput = marked.parse(textToParse);
-
-        // 3. Diff check (Prevent unnecessary DOM churn)
-        if (this.streamingState.lastRenderedHtml !== htmlOutput) {
-            this.streamingState.container.innerHTML = htmlOutput;
-            this.streamingState.lastRenderedHtml = htmlOutput;
+        // Render Markdown
+        const htmlContent = marked.parse(processedText);
+        
+        // Efficient DOM update: Only update if changed
+        if (container.dataset.lastHash !== htmlContent.length) {
+            container.innerHTML = htmlContent;
+            container.dataset.lastHash = htmlContent.length;
             
-            // 4. Process Diagrams
-            this.processDiagrams(this.streamingState.container);
-            
-            // 5. Sync Scroll
-            this.scrollToBottom();
+            // Post-process Mermaid blocks
+            this.processMermaidBlocks(container);
         }
+        
+        this.scrollToBottom();
     }
 
-    processDiagrams(container) {
-        const mermaidBlocks = container.querySelectorAll('pre code.language-mermaid');
-        mermaidBlocks.forEach((block, index) => {
+    processMermaidBlocks(container) {
+        const codeBlocks = container.querySelectorAll('pre code.language-mermaid');
+        codeBlocks.forEach((block, index) => {
+            const parent = block.parentElement;
             const code = block.textContent.trim();
             
-            // Check if diagram code is even minimally valid
-            if (code.length < 10) return; 
-
-            const parent = block.parentElement;
-            const containerId = `mermaid-output-${index}`;
-            
-            let outputDiv = parent.nextElementSibling;
-            if (!outputDiv || !outputDiv.classList.contains('mermaid-container')) {
-                outputDiv = document.createElement('div');
-                outputDiv.className = 'mermaid-container';
-                outputDiv.id = containerId;
-                parent.after(outputDiv);
-                parent.style.display = 'none'; // Hide raw markdown code
+            // Check if Mermaid code is complete
+            if (this.isMermaidComplete(code)) {
+                const containerId = `mermaid-container-${index}`;
+                let mermaidDiv = parent.nextElementSibling;
+                
+                if (!mermaidDiv || !mermaidDiv.classList.contains('mermaid-container')) {
+                    mermaidDiv = document.createElement('div');
+                    mermaidDiv.id = containerId;
+                    mermaidDiv.className = 'mermaid-container';
+                    parent.after(mermaidDiv);
+                    parent.style.display = 'none'; // Hide raw code
+                }
+                
+                // Debounce Mermaid rendering
+                this.mermaidManager.renderDiagram(containerId, code);
             }
-
-            // Attempt render
-            this.mermaidManager.renderDiagram(outputDiv.id, code);
         });
     }
 
-    addMessage(text, role) {
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `message ${role}-message markdown-body`;
-        
-        if (role === 'user') {
-            msgDiv.textContent = text;
-        }
-        
-        this.chatContainer.appendChild(msgDiv);
-        this.scrollToBottom();
-        return msgDiv;
+    isMermaidComplete(code) {
+        // Basic heuristic: check if it has common Mermaid starting keywords and minimum lines
+        const starts = ['graph', 'sequenceDiagram', 'gannt', 'classDiagram', 'erDiagram', 'stateDiagram', 'pie', 'flowchart'];
+        const hasStart = starts.some(s => code.trim().startsWith(s));
+        return hasStart && code.split('\n').length > 1;
     }
 
-    finalizeStream() {
-        if (this.streamingState.fullText) {
-            this.messages.push({ role: 'assistant', content: this.streamingState.fullText });
+    finalizeStream(finalText) {
+        if (finalText) {
+            this.messages.push({ role: 'assistant', content: finalText });
         }
-        this.toggleUIState(false);
+        this.toggleLoading(false);
         this.abortController = null;
     }
 
-    toggleUIState(isLoading) {
+    toggleLoading(isLoading) {
         this.sendBtn.classList.toggle('hidden', isLoading);
         this.stopBtn.classList.toggle('hidden', !isLoading);
     }
 
-    handleStop() {
-        if (this.abortController) this.abortController.abort();
-    }
-
-    clearChat() {
-        this.chatContainer.innerHTML = '';
-        this.messages = [];
-    }
-
     scrollToBottom() {
-        this.chatContainer.scrollTo({
-            top: this.chatContainer.scrollHeight,
-            behavior: 'smooth'
-        });
+        this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
     }
 }
 
-// Global Initialization
+// Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
-    window.app = new StreamingEngine();
+    window.engine = new StreamingEngine();
 });
