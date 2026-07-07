@@ -1,80 +1,98 @@
 import os
 import json
 import logging
-import asyncio
-from typing import Dict, Any
-from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
+from typing import AsyncGenerator
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
-import uvicorn
 
-# -----------------------------------------------------------------------------
-# CONFIGURATION
-# -----------------------------------------------------------------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("groq_mirror")
+# Load environment variables
 load_dotenv()
 
-# إعدادات Groq
-API_KEY = os.getenv("API_KEY")
-BASE_URL = "https://api.groq.com/openai/v1"
-MODEL_NAME = "llama-3.1-8b-instant"
+# Configuration
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+MODEL_NAME = "llama-3.1-70b-versatile"
 
-if not API_KEY:
-    raise ValueError("API_KEY غير موجود في إعدادات البيئة!")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY is not set in environment variables.")
 
-# -----------------------------------------------------------------------------
-# INITIALIZATION
-# -----------------------------------------------------------------------------
-app = FastAPI(title="Groq Mirror API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Initialize FastAPI
+app = FastAPI(title="Groq Mirror Professional")
 
-client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
-SYSTEM_CONFIG = {"base_prompt": "You are a strict Mermaid diagram generator. Respond only in raw JSON."}
+# Setup Static & Templates
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
-# -----------------------------------------------------------------------------
-# ENDPOINTS
-# -----------------------------------------------------------------------------
+# Initialize Groq Client (OpenAI Compatible)
+client = AsyncOpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=GROQ_API_KEY
+)
 
-@app.post("/api/update-config")
-async def update_system_configuration(config: Dict[str, Any]):
-    new_prompt = config.get("base_prompt")
-    if not new_prompt:
-        raise HTTPException(status_code=400, detail="Missing base_prompt")
-    SYSTEM_CONFIG["base_prompt"] = str(new_prompt)
-    return {"status": "success"}
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """Serve the main UI."""
+    return templates.TemplateResponse("mirror.html", {"request": request})
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy"}
 
 @app.post("/api/chat")
-async def process_chat_stream(request: Request) -> StreamingResponse:
-    body = await request.json()
-    raw_messages = body.get("messages", [])
-    
-    # تحضير الرسائل
-    compiled_messages = [{"role": "system", "content": f"{SYSTEM_CONFIG['base_prompt']} Return JSON only."}] + raw_messages[-3:]
+async def chat_endpoint(request: Request):
+    """
+    Handle streaming chat requests.
+    Expects JSON: { "messages": [...], "model": "..." }
+    """
+    try:
+        data = await request.json()
+        messages = data.get("messages", [])
+        
+        if not messages:
+            raise HTTPException(status_code=400, detail="No messages provided")
 
-    async def chat_sse_stream_generator():
-        try:
-            response = await client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=compiled_messages,
-                temperature=0.1
-            )
-            
-            raw_content = response.choices[0].message.content
-            # تنظيف الـ JSON
-            clean_json = raw_content.replace("```json", "").replace("```", "").strip()
-            parsed = json.loads(clean_json)
-            
-            yield f"data: {json.dumps({'content': parsed.get('mermaid_code', '')})}\n\n"
-            yield "data: [DONE]\n\n"
-            
-        except Exception as e:
-            logger.error(f"Error: {str(e)}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        async def stream_generator() -> AsyncGenerator[str, None]:
+            try:
+                stream = await client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=messages,
+                    stream=True,
+                    temperature=0.7,
+                    max_tokens=8192
+                )
+                
+                async for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        # Send as Server-Sent Events (SSE)
+                        yield f"data: {json.dumps({'content': content})}\n\n"
+                
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                logger.error(f"Streaming error: {str(e)}")
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
-    return StreamingResponse(chat_sse_stream_generator(), media_type="text/event-stream")
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Content-Encoding": "none",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Endpoint error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=False)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
