@@ -23,7 +23,7 @@ BASE_URL = "https://api.groq.com/openai/v1"
 MODEL_NAME = "llama-3.3-8b-instant"
 
 if not API_KEY:
-    raise ValueError("GROQ_API_KEY غير موجود في إعدادات البيئة!")
+    raise ValueError("API_KEY غير موجود في إعدادات البيئة!")
 
 # -----------------------------------------------------------------------------
 # INITIALIZATION
