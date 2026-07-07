@@ -20,7 +20,7 @@ load_dotenv()
 # إعدادات Groq
 API_KEY = os.getenv("API_KEY")
 BASE_URL = "https://api.groq.com/openai/v1"
-MODEL_NAME = "llama-3.3-8b-instant"
+MODEL_NAME = "llama-3.1-8b-instant"
 
 if not API_KEY:
     raise ValueError("API_KEY غير موجود في إعدادات البيئة!")
