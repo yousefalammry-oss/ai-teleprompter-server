@@ -5,311 +5,88 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Groq Mirror Pro</title>
     <link rel="stylesheet" href="/static/style.css">
-
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-    <style>
-        /* حاوية مؤقتة أثناء البث تعرض النص الخام بشكل مقروء قبل تحويله لرسم */
-        .mermaid-streaming {
-            white-space: pre-wrap;
-            font-family: monospace;
-            color: #888;
-            background: #111;
-            padding: 10px;
-            border-radius: 6px;
-        }
-    </style>
 </head>
 <body class="dark-theme">
-
-    <section id="config-panel" style="background: #1a1a1a; padding: 20px; border-bottom: 2px solid #333;">
-        <h3 style="margin-top: 0; color: #aaa;">إعدادات الذكاء الاصطناعي</h3>
-        <textarea id="sys-prompt" style="width: 100%; height: 80px; background: #000; color: #fff; border: 1px solid #555; padding: 10px; border-radius: 5px;">You are a strict Mermaid diagram generator. Output ONLY valid mermaid code blocks. Every node connection (e.g., A --> B) MUST be written on a completely new line. Do NOT combine multiple connections into a single line. Do NOT write any conversational text or summary before or after the code block. Start with ```mermaid and end with ```.</textarea>
-        <button onclick="saveConfig()" style="margin-top: 10px; padding: 8px 20px; cursor: pointer;">حفظ الإعدادات</button>
-    </section>
-
     <div class="app-container">
         <header class="main-header">
             <div class="logo">Groq<span>Mirror</span></div>
             <div class="actions">
-                <button id="clear-btn" onclick="document.getElementById('chat-container').innerHTML=''">Clear</button>
+                <button id="clear-btn" title="Clear Chat">Clear</button>
             </div>
         </header>
+
         <main id="chat-container" class="chat-area"></main>
+
+        <footer class="input-area">
+            <div class="input-wrapper">
+                <textarea id="user-input" placeholder="Type a message or a Mermaid request..." rows="1"></textarea>
+                <div class="button-group">
+                    <button id="send-btn" class="primary-btn">Send</button>
+                    <button id="stop-btn" class="secondary-btn hidden">Stop</button>
+                </div>
+            </div>
+        </footer>
     </div>
 
     <script>
-        let eventSource = null;
-
-        mermaid.initialize({
-            startOnLoad: false,
-            theme: 'dark',
-            securityLevel: 'loose'
-        });
-
-        const renderer = new marked.Renderer();
-        renderer.code = function(codeObj) {
-            const text = codeObj.text || codeObj;
-            const lang = codeObj.lang || '';
-
-            if (lang === 'mermaid' || looksLikeMermaid(text)) {
-                return `<div class="mermaid">${text}</div>`;
-            }
-            return `<pre><code class="language-${lang}">${text}</code></pre>`;
-        };
-        marked.setOptions({ renderer: renderer });
-
-        // === الإصلاح الأساسي ===
-        // النصوص القادمة من الموديل غالباً بلا ```mermaid على الإطلاق،
-        // لذا نكتشفها مباشرة بدل الاعتماد على marked لتمييزها كـ code block
-        function looksLikeMermaid(text) {
-            return /graph\s+(TD|LR|TB|BT|RL)/i.test(text)
-                || /-->/.test(text)
-                || /^\s*mermaidgraph/i.test(text);
-        }
-
-        async function saveConfig() {
-            const prompt = document.getElementById('sys-prompt').value;
-            const response = await fetch('/api/update-config', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({base_prompt: prompt})
-            });
-            if (response.ok) alert("تم تحديث الإعدادات!");
-        }
-
-        // أثناء البث: لو النص يبدو كمخطط ميرميد، نعرضه كنص خام (بدون محاولة رسمه وهو غير مكتمل)
-        // لأن رسم مخطط ناقص بشكل متكرر يسبب أخطاء ووميض في الواجهة
-        function renderStreamingContent(element, rawText) {
-            if (looksLikeMermaid(rawText)) {
-                element.classList.add('mermaid-streaming');
-                element.classList.remove('mermaid');
-                element.innerText = rawText;
-                return;
-            }
-
-            element.classList.remove('mermaid-streaming');
-            element.innerHTML = marked.parse(rawText);
-            element.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
+        // دالة عرض المحتوى وتحديث الـ Markdown والـ Mermaid
+        function renderContent(element) {
+            element.innerHTML = marked.parse(element.innerText);
+            mermaid.init(undefined, element.querySelectorAll('.mermaid'));
+            element.querySelectorAll('pre code').forEach((block) => {
                 hljs.highlightElement(block);
             });
         }
 
-        // === تنظيف أساسي: إصلاح الأسوار والأسهم والتصاق الأسطر (كما كان) ===
-        function sanitizeMermaidCode(raw) {
-            let code = raw;
+        // مستمع البث المباشر (SSE)
+    let eventSource = null; // متغير عام لتخزين الاتصال الحالي
 
-            code = code.replace(/```mermaid/gi, "");
-            code = code.replace(/```/g, "");
-            code = code.replace(/mermaidgraph/gi, "graph TD");
+function initMirrorListener() {
+    // 1. إغلاق أي اتصال مفتوح سابقاً قبل فتح واحد جديد
+    if (eventSource) {
+        eventSource.close();
+    }
 
-            code = code.replace(/->>/g, " --> ");
-            code = code.replace(/->/g, " --> ");
-            code = code.replace(/--\s*>/g, " --> ");
+    const chatContainer = document.getElementById('chat-container');
+    eventSource = new EventSource('/api/stream-mirror');
+    let currentMessageDiv = null;
 
-            code = code.replace(/(\s*subgraph\s+[A-Za-z0-9_]+)/gi, "\n$1\n");
-            code = code.replace(/(\])\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
-            code = code.replace(/(\))\s*([A-Za-z0-9_]+)(\[|\()/gi, "$1\n$2$3");
-            code = code.replace(/(\S+\s*-->\s*[^\]\[\)\(]+?(?:\]|\)|[\s\w]+))\s+([A-Za-z0-9_]+\s*-->)/gi, "$1\n$2");
-            code = code.replace(/(Error\s*){2,}/gi, "Error1 ");
-            code = code.replace(/end\s+end/gi, "end");
-
-            code = code.replace(/(-->\s*(?:\|[^|]*\|)?\s*)end\b/gi, "$1EndNode");
-            code = code.replace(/\bend\b(?=\S)/gi, "end\n");
-
-            const seenNodeIds = new Set();
-            code = code.replace(/([A-Za-z0-9_]+)(\[[^\]]*\]|\([^\)]*\))/g, (match, id, label) => {
-                if (seenNodeIds.has(id)) return id;
-                seenNodeIds.add(id);
-                return match;
-            });
-
-            return code.split('\n')
-                        .map(line => line.trim())
-                        .filter(line => line.length > 0)
-                        .join('\n');
+    eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.content === "[DONE]") {
+            currentMessageDiv = null;
+            return;
         }
 
-        // === التحقق الفعلي من صحة الكود عبر محلل mermaid نفسه، بدل تخمين الأخطاء ===
-        async function isMermaidValid(code) {
-            try {
-                await mermaid.parse(code);
-                return true;
-            } catch (e) {
-                return false;
-            }
+        if (!data.content) return;
+
+        if (!currentMessageDiv) {
+            currentMessageDiv = document.createElement('div');
+            currentMessageDiv.className = 'message ai-message';
+            chatContainer.appendChild(currentMessageDiv);
         }
 
-        // === الحل النهائي: بدل ترقيع نص تالف، نستخرج العُقد والعلاقات الفعلية
-        // ونعيد بناء مخطط جديد من الصفر بصيغة مضمونة الصحة ===
-        function rebuildGraphFromScratch(raw) {
-            const nodeDefs = new Map();
-            const nodeDefRegex = /([A-Za-z0-9_]+)\s*(\[[^\]\n]*\]|\(\([^\)\n]*\)\)|\([^\)\n]*\))/g;
-            let m;
-            while ((m = nodeDefRegex.exec(raw)) !== null) {
-                const id = m[1];
-                if (/^(end|graph|subgraph)$/i.test(id)) continue;
-                if (!nodeDefs.has(id)) nodeDefs.set(id, m[2]);
-            }
+        currentMessageDiv.innerText += data.content;
+        renderContent(currentMessageDiv);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    };
 
-            const edges = [];
-            const seenEdges = new Set();
-            const edgeRegex = /([A-Za-z0-9_]+)\s*-->\s*(?:\|([^|]*)\|\s*)?([A-Za-z0-9_]+)/g;
-            while ((m = edgeRegex.exec(raw)) !== null) {
-                const [, from, label, to] = m;
-                if (/^end$/i.test(from) || /^end$/i.test(to)) continue;
-                const key = from + '|' + (label || '') + '|' + to;
-                if (seenEdges.has(key)) continue;
-                seenEdges.add(key);
-                edges.push({ from, label, to });
-            }
+    eventSource.onerror = () => {
+        // إغلاق الاتصال المعطوب ومحاولة إعادة الاتصال بعد 5 ثواني
+        eventSource.close();
+        setTimeout(initMirrorListener, 5000);
+    };
+}
 
-            if (edges.length === 0) return null;
-
-            let out = "graph TD\n";
-            nodeDefs.forEach((label, id) => { out += `    ${id}${label}\n`; });
-            edges.forEach(({ from, label, to }) => {
-                out += label
-                    ? `    ${from} -->|${label.trim()}| ${to}\n`
-                    : `    ${from} --> ${to}\n`;
-            });
-            return out;
-        }
-
-        // عند اكتمال الرسالة: تنظيف → تحقق → إعادة بناء عند الفشل → رسالة واضحة كملاذ أخير
-        async function finalizeRender(element) {
-            try {
-                const raw = element.innerText;
-
-                if (!looksLikeMermaid(raw)) {
-                    element.classList.remove('mermaid-streaming');
-                    element.innerHTML = marked.parse(raw);
-                    element.querySelectorAll('pre code:not(.hljs)').forEach((block) => {
-                        hljs.highlightElement(block);
-                    });
-                    return;
-                }
-
-                let code = sanitizeMermaidCode(raw);
-                let valid = await isMermaidValid(code);
-
-                if (!valid) {
-                    console.warn("فشل التحقق بعد التنظيف الأساسي، جارٍ إعادة البناء من الصفر...");
-                    const rebuilt = rebuildGraphFromScratch(raw);
-                    if (rebuilt && await isMermaidValid(rebuilt)) {
-                        code = rebuilt;
-                        valid = true;
-                    }
-                }
-
-                if (!valid) {
-                    element.classList.remove('mermaid-streaming', 'mermaid');
-                    const escaped = raw.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                    element.innerHTML = `
-                        <div style="border-left:3px solid #ff4444; padding:10px; color:#ccc;">
-                            <strong>تعذر رسم المخطط</strong> — محتوى المخطط الوارد من الموديل غير صالح البنية حتى بعد الإصلاح التلقائي وإعادة البناء.
-                            <details style="margin-top:8px;">
-                                <summary style="cursor:pointer;">عرض الكود الخام للمراجعة</summary>
-                                <pre style="white-space:pre-wrap; font-size:12px;">${escaped}</pre>
-                            </details>
-                        </div>`;
-                    return;
-                }
-
-                element.classList.remove('mermaid-streaming');
-                element.classList.add('mermaid');
-                element.innerHTML = '';
-                element.innerText = code;
-
-                await mermaid.run({ nodes: [element] });
-
-            } catch (error) {
-                console.error("Mermaid parsing error:", error);
-                element.style.borderLeft = "3px solid #ff4444";
-                element.style.paddingLeft = "10px";
-            }
-        }
-
-
-        function initMirrorListener() {
-            if (eventSource) {
-                eventSource.close();
-            }
-
-            const chatContainer = document.getElementById('chat-container');
-            eventSource = new EventSource('/api/stream-mirror');
-
-            let currentMessageDiv = null;
-            let accumulatedText = "";
-            let idleTimer = null;
-            const IDLE_MS = 2000; // لو مفيش بيانات جديدة لمدة ثانيتين، اعتبر البث خلص
-
-            async function finishCurrentMessage() {
-                if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-                if (currentMessageDiv) {
-                    await finalizeRender(currentMessageDiv);
-                }
-                currentMessageDiv = null;
-                accumulatedText = "";
-            }
-
-            function resetIdleTimer() {
-                if (idleTimer) clearTimeout(idleTimer);
-                idleTimer = setTimeout(() => {
-                    console.log("Idle timeout reached — finalizing mermaid render as fallback.");
-                    finishCurrentMessage();
-                }, IDLE_MS);
-            }
-
-            eventSource.onmessage = async (event) => {
-                let raw = event.data;
-
-                // بعض السيرفرات ترسل [DONE] كنص خام مش JSON — نتعامل معه أولاً
-                if (raw.trim() === "[DONE]" || raw.includes('"[DONE]"')) {
-                    await finishCurrentMessage();
-                    return;
-                }
-
-                let data;
-                try {
-                    data = JSON.parse(raw);
-                } catch (e) {
-                    // بدل التجاهل الصامت: نسجل البيانات الخام عشان نعرف شكلها الحقيقي
-                    console.warn("Could not parse SSE chunk as JSON, raw value:", raw);
-                    return;
-                }
-
-                if (data.content === "[DONE]" || data.content === "[DONE]\n\n") {
-                    await finishCurrentMessage();
-                    return;
-                }
-
-                if (!data.content) return;
-
-                if (!currentMessageDiv) {
-                    currentMessageDiv = document.createElement('div');
-                    currentMessageDiv.className = 'message ai-message';
-                    chatContainer.appendChild(currentMessageDiv);
-                    accumulatedText = "";
-                }
-
-                accumulatedText += data.content;
-                renderStreamingContent(currentMessageDiv, accumulatedText);
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-                resetIdleTimer();
-            };
-
-            eventSource.onerror = async () => {
-                console.log("Connection lost, finalizing pending message then reconnecting...");
-                await finishCurrentMessage();
-                eventSource.close();
-                setTimeout(initMirrorListener, 5000);
-            };
-        }
-
+        // تشغيل البث عند تحميل الصفحة
         initMirrorListener();
     </script>
+    
+    <script type="module" src="/static/app.js"></script>
 </body>
 </html>
